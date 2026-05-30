@@ -65,7 +65,7 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    console.log('✅ Firebase инициализирован');
+    console.log('✅ Firebase initialized');
 
     let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
     let roomId = null;
@@ -102,8 +102,8 @@
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === document.getElementById('canvas') && camera && !isChatOpen) {
             camera.rotation.order = 'YXZ';
-            // Изменено на += для исправления инверсии мыши
-            camera.rotation.y += e.movementX * 0.0025;
+            // Нормальное вращение мыши (без горизонтальной инверсии)
+            camera.rotation.y -= e.movementX * 0.0025;
             camera.rotation.x -= e.movementY * 0.0025;
             if (camera.rotation.x > Math.PI / 2.2) camera.rotation.x = Math.PI / 2.2;
             if (camera.rotation.x < -Math.PI / 2.2) camera.rotation.x = -Math.PI / 2.2;
@@ -288,8 +288,8 @@
         playerMesh = createPlayerMesh(startX, 0, 0, true);
         scene.add(playerMesh);
 
-        // Инициализация позиции камеры строго в глазах
-        camera.position.set(startX, 1.9, 0.55); 
+        // Камера инициируется внутри модели и смотрит вперед по оси -Z
+        camera.position.set(startX, 1.9, -0.05); 
         camera.lookAt(playerRole === 'host' ? 15 : -15, 1.9, 0);
 
         animate();
@@ -354,7 +354,6 @@
     function createPlayerMesh(x, y, z, isLocal) {
         const group = new THREE.Group();
 
-        // Тело смотрит лицом по направлению оси +Z (вперед)
         const bodyGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16);
         const bodyMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff, roughness: 0.5 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
@@ -370,22 +369,22 @@
         bottomCap.position.y = 0.5;
         group.add(bottomCap);
 
-        // Глаза вынесены на переднюю сторону (+Z)
+        // Фикс: Переносим глаза на переднюю сторону по умолчанию в Three.js (ось -Z)
         const eyeGeo = new THREE.SphereGeometry(0.14, 8, 8);
         const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
         const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-        leftEye.position.set(-0.25, 2.0, 0.52);
+        leftEye.position.set(-0.25, 2.0, -0.52);
         const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
-        leftPupil.position.set(-0.25, 2.0, 0.63);
+        leftPupil.position.set(-0.25, 2.0, -0.63);
         group.add(leftEye);
         group.add(leftPupil);
 
         const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-        rightEye.position.set(0.25, 2.0, 0.52);
+        rightEye.position.set(0.25, 2.0, -0.52);
         const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
-        rightPupil.position.set(0.25, 2.0, 0.63);
+        rightPupil.position.set(0.25, 2.0, -0.63);
         group.add(rightEye);
         group.add(rightPupil);
 
@@ -475,11 +474,11 @@
                 const speed = 0.16;
                 const dir = new THREE.Vector3();
 
-                // Приводим WASD в соответствие с направлением взгляда (+Z вперед)
-                if (keys.forward) dir.z += 1;
-                if (keys.backward) dir.z -= 1;
-                if (keys.left) dir.x += 1;
-                if (keys.right) dir.x -= 1;
+                // Фикс: WASD теперь полностью согласованы с направлением -Z (вперед)
+                if (keys.forward) dir.z -= 1;
+                if (keys.backward) dir.z += 1;
+                if (keys.left) dir.x -= 1;
+                if (keys.right) dir.x += 1;
 
                 let isMoving = false;
                 if (dir.lengthSq() > 0) {
@@ -491,11 +490,10 @@
                     createTrailParticle(playerMesh.position.x, playerMesh.position.z);
                 }
                 
-                // Модель плавно следует за поворотом камеры
                 playerMesh.rotation.y = camera.rotation.y;
 
-                // Камера строго выдвинута вперед (+0.55) прямо в глаза таблетки
-                const offset = new THREE.Vector3(0, 1.9, 0.55);
+                // Камера сидит внутри головы, чуть-чуть смещена назад по -Z
+                const offset = new THREE.Vector3(0, 1.9, -0.05);
                 offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
                 camera.position.copy(playerMesh.position).add(offset);
 
