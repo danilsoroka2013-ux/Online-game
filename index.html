@@ -65,7 +65,7 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    console.log('✅ Firebase подключен');
+    console.log('✅ Firebase инициализирован');
 
     let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
     let roomId = null;
@@ -102,9 +102,9 @@
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === document.getElementById('canvas') && camera && !isChatOpen) {
             camera.rotation.order = 'YXZ';
-            // Стандартный классический FPS обзор мыши без инверсий
-            camera.rotation.y -= e.movementX * 0.0025;
-            camera.rotation.x -= e.movementY * 0.0025;
+            // ИСПРАВЛЕНО: Поменял знаки на противоположные для мыши
+            camera.rotation.y += e.movementX * 0.0025;
+            camera.rotation.x += e.movementY * 0.0025;
             if (camera.rotation.x > Math.PI / 2.2) camera.rotation.x = Math.PI / 2.2;
             if (camera.rotation.x < -Math.PI / 2.2) camera.rotation.x = -Math.PI / 2.2;
         }
@@ -266,8 +266,6 @@
         scene.fog = new THREE.FogExp2(0xaaccff, 0.015);
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        // Камера рендерит только базовый слой (0), игнорируя слой (1), где находится наш меш
-        camera.layers.enable(0);
 
         renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -287,17 +285,11 @@
         generateEnvironment();
 
         const startX = playerRole === 'host' ? -15 : 15;
-        // Создаем своего персонажа
         playerMesh = createPlayerMesh(startX, 0, 0, true);
         scene.add(playerMesh);
 
-        // Прячем все части своего меша от собственной камеры (переносим на слой 1)
-        playerMesh.traverse(child => {
-            if(child.isMesh) child.layers.set(1);
-        });
-
-        // Ставим камеру точно по центру таблетки на уровень глаз
-        camera.position.set(startX, 1.9, 0); 
+        // ИСПРАВЛЕНО: Камера изначально жестко отодвинута назад на 2 единицы
+        camera.position.set(startX, 1.9, 2.0); 
         camera.lookAt(playerRole === 'host' ? 15 : -15, 1.9, 0);
 
         animate();
@@ -377,7 +369,7 @@
         bottomCap.position.y = 0.5;
         group.add(bottomCap);
 
-        // Глаза направлены вперед по дефолтной оси -Z
+        // Глаза стоят на исходном месте
         const eyeGeo = new THREE.SphereGeometry(0.14, 8, 8);
         const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
@@ -482,11 +474,11 @@
                 const speed = 0.16;
                 const dir = new THREE.Vector3();
 
-                // Классическое WASD движение по дефолтным осям Three.js
-                if (keys.forward) dir.z -= 1;
-                if (keys.backward) dir.z += 1;
-                if (keys.left) dir.x -= 1;
-                if (keys.right) dir.x += 1;
+                // ИСПРАВЛЕНО: Поменял знаки инверсии на противоположные во всем WASD блоке
+                if (keys.forward) dir.z += 1;
+                if (keys.backward) dir.z -= 1;
+                if (keys.left) dir.x += 1;
+                if (keys.right) dir.x -= 1;
 
                 let isMoving = false;
                 if (dir.lengthSq() > 0) {
@@ -500,9 +492,10 @@
                 
                 playerMesh.rotation.y = camera.rotation.y;
 
-                // Камера строго по центру на высоте глаз
-                camera.position.copy(playerMesh.position);
-                camera.position.y = 1.9;
+                // ИСПРАВЛЕНО: Камера теперь всегда жестко отдалена НАЗАД НА 2 ЕДИНИЦЫ (z = 2.0)
+                const offset = new THREE.Vector3(0, 1.9, 2.0);
+                offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
+                camera.position.copy(playerMesh.position).add(offset);
 
                 db.ref('rooms/' + roomId + '/pos/' + playerId).set({
                     x: Math.round(playerMesh.position.x * 100) / 100,
