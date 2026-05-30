@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Third Person Game</title>
+    <title>Third Person Multiplayer Game</title>
     <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
     <style>
@@ -55,6 +55,8 @@
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
     import { keys, initControls, resetKeys } from './control.js';
     import { initCameraRotation, setInitialYaw, updateCameraPosition, cameraYaw } from './camera.js';
+    import { generateEnvironment, checkCollisions } from './world.js';
+    import { initTakeMechanic, carryState, updateThrowPhysics } from './take.js';
 
     const firebaseConfig = {
         apiKey: "AIzaSyC9eNl5RdU8dIB1dM4uJ4-RbYbTdkl5L1w",
@@ -67,9 +69,9 @@
 
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
-    console.log('✅ Firebase подключен');
 
     let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
+    let otherPlayerId = null;
     let roomId = null;
     let playerRole = null;
     let scene, camera, renderer, playerMesh, otherPlayerMesh;
@@ -78,43 +80,35 @@
     let syncInterval = null;
     let particles = [];
 
-    // Привязываем кнопки к функциям, так как инлайн onclick в модулях не работает
     document.getElementById('playBtn').addEventListener('click', showLobby);
     document.getElementById('createRoomBtn').addEventListener('click', createRoom);
     document.getElementById('joinRoomBtn').addEventListener('click', joinRoom);
     document.getElementById('startBtn').addEventListener('click', startGame);
     document.getElementById('backBtn').addEventListener('click', backToMenu);
 
-    // Передаем проверку состояния чата в модули управления и камеры
     initControls(() => isChatOpen);
     initCameraRotation(document.getElementById('canvas'), () => isChatOpen);
+    
+    // Инициализация механики таскания
+    initTakeMechanic(db, () => roomId, playerId, () => otherPlayerId, () => playerMesh, () => otherPlayerMesh, () => cameraYaw);
 
-    // Отдельный листенер для Enter (открытие/закрытие чата)
     document.addEventListener('keydown', (e) => {
-        if (e.code === 'Enter' && gameStarted) {
-            handleChatToggle();
-        }
+        if (e.code === 'Enter' && gameStarted) handleChatToggle();
     });
 
     function handleChatToggle() {
         const container = document.getElementById('chatInputContainer');
         const input = document.getElementById('chatInput');
-
         if (!isChatOpen) {
-            isChatOpen = true;
-            resetKeys();
-            document.exitPointerLock?.();
-            container.style.display = 'block';
-            input.focus();
+            isChatOpen = true; resetKeys(); document.exitPointerLock?.();
+            container.style.display = 'block'; input.focus();
         } else {
-            isChatOpen = false;
-            const text = input.value.trim();
+            isChatOpen = false; const text = input.value.trim();
             if (text) {
                 db.ref('rooms/' + roomId + '/chats/' + playerId).set({ text: text, timestamp: Date.now() });
                 show3DText(playerMesh, text);
             }
-            input.value = '';
-            container.style.display = 'none';
+            input.value = ''; container.style.display = 'none';
             document.getElementById('canvas').requestPointerLock?.();
         }
     }
@@ -134,8 +128,7 @@
     }
 
     function createRoom() {
-        roomId = generateCode();
-        playerRole = 'host';
+        roomId = generateCode(); playerRole = 'host';
         const roomRef = db.ref('rooms/' + roomId);
         roomRef.set({ host: playerId, players: {[playerId]: true}, started: false }).then(() => {
             document.getElementById('codeInput').style.display = 'none';
@@ -165,11 +158,15 @@
 
     function listenToRoom() {
         db.ref('rooms/' + roomId).on('value', (snapshot) => {
-            if (!snapshot.exists()) { if (gameStarted) { alert('Игрок отключился. Возврат в меню.'); resetGameSession(); } return; }
+            if (!snapshot.exists()) { if (gameStarted) { alert('Игрок отключился.'); resetGameSession(); } return; }
             const room = snapshot.val();
             const currentPlayers = Object.keys(room.players || {});
             document.getElementById('playerCount').innerHTML = 'Игроков: ' + currentPlayers.length + '/2';
-            if (gameStarted && currentPlayers.length < 2) { alert('Игрок вышел из игры!'); resetGameSession(); return; }
+            
+            // Вычисляем ID напарника
+            currentPlayers.forEach(id => { if(id !== playerId) otherPlayerId = id; });
+
+            if (gameStarted && currentPlayers.length < 2) { alert('Игрок вышел!'); resetGameSession(); return; }
             if (currentPlayers.length === 2 && playerRole === 'host') document.getElementById('startBtn').classList.add('show');
             if (room.started && !gameStarted) startGame();
         });
@@ -196,59 +193,23 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
 
         const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-        dirLight.position.set(20, 40, 20);
-        scene.add(dirLight);
+        dirLight.position.set(20, 40, 20); scene.add(dirLight);
         scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
         const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0x55aa44, roughness: 0.9 }));
-        floor.rotation.x = -Math.PI / 2;
-        scene.add(floor);
+        floor.rotation.x = -Math.PI / 2; scene.add(floor);
 
-        generateEnvironment();
+        // Генерация окружения из world.js
+        generateEnvironment(scene);
 
         const startX = playerRole === 'host' ? -15 : 15;
         playerMesh = createPlayerMesh(startX, 0, 0, true);
         scene.add(playerMesh);
 
-        // Инициализируем направление взгляда из модуля camera.js
         const startYaw = playerRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
         setInitialYaw(startYaw);
 
         animate();
-    }
-
-    function generateEnvironment() {
-        for (let i = 0; i < 20; i++) {
-            const tree = new THREE.Group();
-            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.5, 4, 8), new THREE.MeshStandardMaterial({ color: 0x5a3d28, roughness: 0.9 }));
-            trunk.position.y = 2; tree.add(trunk);
-            const leaves = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 8), new THREE.MeshStandardMaterial({ color: 0x2e6f40, roughness: 0.6 }));
-            leaves.position.y = 4.5; tree.add(leaves);
-            setRandomPosition(tree, 15, 120); scene.add(tree);
-        }
-        for (let i = 0; i < 30; i++) {
-            const size = 0.5 + Math.random() * 1.2;
-            const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size), new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 }));
-            rock.position.y = size * 0.5; rock.scale.set(1, 0.7 + Math.random()*0.5, 1);
-            setRandomPosition(rock, 10, 130); scene.add(rock);
-        }
-        for (let i = 0; i < 150; i++) {
-            const grassGroup = new THREE.Group();
-            const bladeMat = new THREE.MeshBasicMaterial({ color: 0x3d8c33 });
-            for(let j = 0; j < 3; j++) {
-                const blade = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.6, 4), bladeMat);
-                blade.position.set((Math.random()-0.5)*0.3, 0.3, (Math.random()-0.5)*0.3);
-                blade.rotation.z = (Math.random() - 0.5) * 0.4; blade.rotation.x = (Math.random() - 0.5) * 0.4;
-                grassGroup.add(blade);
-            }
-            setRandomPosition(grassGroup, 5, 140); scene.add(grassGroup);
-        }
-    }
-
-    function setRandomPosition(object, minDist, maxDist) {
-        const angle = Math.random() * Math.PI * 2;
-        const radius = minDist + Math.random() * (maxDist - minDist);
-        object.position.x = Math.cos(angle) * radius; object.position.z = Math.sin(angle) * radius;
     }
 
     function createPlayerMesh(x, y, z, isLocal) {
@@ -316,31 +277,46 @@
     function syncPlayers() {
         syncInterval = setInterval(() => {
             if (playerMesh && gameStarted && camera) {
-                const speed = 0.16;
-                const moveVector = new THREE.Vector3();
-
-                // Импортированные чистые клавиши из control.js
-                if (keys.forward) moveVector.z -= 1;
-                if (keys.backward) moveVector.z += 1;
-                if (keys.left) moveVector.x -= 1;
-                if (keys.right) moveVector.x += 1;
-
                 let isMoving = false;
-                if (moveVector.lengthSq() > 0) {
-                    moveVector.normalize().multiplyScalar(speed);
-                    moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-                    playerMesh.position.add(moveVector);
-                    isMoving = true;
-                    createTrailParticle(playerMesh.position.x, playerMesh.position.z);
-                }
-                
-                playerMesh.rotation.y = cameraYaw;
 
-                // Передаем обновление позиции камере изcamera.js
-                updateCameraPosition(camera, playerMesh.position);
+                // Двигаться можно только если ТЕБЯ НЕ НЕСУТ
+                if (!carryState.isBeingCarried && !carryState.throwVelocity) {
+                    const speed = 0.16;
+                    const moveVector = new THREE.Vector3();
+
+                    if (keys.forward) moveVector.z -= 1;
+                    if (keys.backward) moveVector.z += 1;
+                    if (keys.left) moveVector.x -= 1;
+                    if (keys.right) moveVector.x += 1;
+
+                    if (moveVector.lengthSq() > 0) {
+                        moveVector.normalize().multiplyScalar(speed);
+                        moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+                        playerMesh.position.add(moveVector);
+                        isMoving = true;
+                        
+                        // Проверка коллизий объектов из world.js
+                        const corrected = checkCollisions(playerMesh.position, 0.6);
+                        playerMesh.position.copy(corrected);
+
+                        createTrailParticle(playerMesh.position.x, playerMesh.position.z);
+                    }
+                    playerMesh.rotation.y = cameraYaw;
+                }
+
+                // Логика камеры: Если меня несут, моя камера привязывается к несущему
+                if (carryState.isBeingCarried && otherPlayerMesh) {
+                    updateCameraPosition(camera, otherPlayerMesh.position);
+                } else {
+                    updateCameraPosition(camera, playerMesh.position);
+                }
+
+                // Расчет физики свободного полета броска
+                updateThrowPhysics(playerMesh, checkCollisions);
 
                 db.ref('rooms/' + roomId + '/pos/' + playerId).set({
                     x: Math.round(playerMesh.position.x * 100) / 100,
+                    y: Math.round(playerMesh.position.y * 100) / 100,
                     z: Math.round(playerMesh.position.z * 100) / 100,
                     rotY: Math.round(playerMesh.rotation.y * 100) / 100,
                     isMoving: isMoving
@@ -354,12 +330,27 @@
                 Object.keys(pos).forEach(id => {
                     if (id !== playerId) {
                         if (!otherPlayerMesh) {
-                            otherPlayerMesh = createPlayerMesh(pos[id].x, 0, pos[id].z, false);
+                            otherPlayerMesh = createPlayerMesh(pos[id].x, pos[id].y || 0, pos[id].z, false);
                             scene.add(otherPlayerMesh);
                         } else {
-                            otherPlayerMesh.position.x = pos[id].x;
-                            otherPlayerMesh.position.z = pos[id].z;
-                            if(pos[id].rotY !== undefined) otherPlayerMesh.rotation.y = pos[id].rotY;
+                            // Если этого игрока КТО-ТО НЕСЕТ (то есть МЫ), позиционируем его меш над собой горизонтально
+                            if (carryState.isCarrying) {
+                                otherPlayerMesh.position.copy(playerMesh.position);
+                                otherPlayerMesh.position.y += 2.8; // Над головой
+                                otherPlayerMesh.rotation.y = playerMesh.rotation.y;
+                                otherPlayerMesh.rotation.z = Math.PI / 2; // Лежит горизонтально
+                            } else {
+                                // Если он сам по себе или летит от броска
+                                otherPlayerMesh.position.x = pos[id].x;
+                                otherPlayerMesh.position.y = pos[id].y || 0;
+                                otherPlayerMesh.position.z = pos[id].z;
+                                otherPlayerMesh.rotation.y = pos[id].rotY;
+                                if (pos[id].y > 0) {
+                                    otherPlayerMesh.rotation.z = Math.PI / 2; // В полете тоже горизонтально
+                                } else {
+                                    otherPlayerMesh.rotation.z = 0;
+                                }
+                            }
                             if (pos[id].isMoving) createTrailParticle(otherPlayerMesh.position.x, otherPlayerMesh.position.z);
                         }
                     }
