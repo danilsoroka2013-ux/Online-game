@@ -27,7 +27,7 @@ export function setInitialYaw(angle) {
 
 export function updateCameraPosition(camera, playerPosition) {
     // НАСТРОЙКА: X = 1.8 (сильно справа), Y = 3.2 (высоко), Z = 3.5 (сзади)
-    const targetOffset = new THREE.Vector3(1.8, 3.2, 3.5);
+    const targetOffset = new THREE.Vector3(2.8, 4.2, 4);
     
     targetOffset.applyAxisAngle(new THREE.Vector3(1, 0, 0), cameraPitch);
     targetOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
