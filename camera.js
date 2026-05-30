@@ -1,8 +1,10 @@
-// camera.js - Модуль камеры от 3-го лица (GTA V Style)
+// camera.js
 import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
 
-export let cameraYaw = 0;
-export let cameraPitch = 0;
+export const cameraRotation = {
+    yaw: 0,
+    pitch: 0
+};
 
 export function initCameraRotation(canvas, isChatOpenCheck) {
     document.addEventListener('click', () => {
@@ -11,29 +13,33 @@ export function initCameraRotation(canvas, isChatOpenCheck) {
 
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === canvas && !isChatOpenCheck()) {
-            cameraYaw -= e.movementX * 0.0025;
-            cameraPitch -= e.movementY * 0.0025;
+            cameraRotation.custom_yaw = (cameraRotation.custom_yaw || 0) - e.movementX * 0.0025;
+            cameraRotation.pitch -= e.movementY * 0.0025;
             
-            if (cameraPitch > Math.PI / 4) cameraPitch = Math.PI / 4;
-            if (cameraPitch < -Math.PI / 6) cameraPitch = -Math.PI / 6;
+            if (cameraRotation.pitch > Math.PI / 4) cameraRotation.pitch = Math.PI / 4;
+            if (cameraRotation.pitch < -Math.PI / 6) cameraRotation.pitch = -Math.PI / 6;
+            
+            cameraRotation.yaw = cameraRotation.custom_yaw;
         }
     });
 }
 
 export function setInitialYaw(angle) {
-    cameraYaw = angle;
-    cameraPitch = 0.1;
+    cameraRotation.yaw = angle;
+    cameraRotation.custom_yaw = angle;
+    cameraRotation.pitch = 0.1;
 }
 
 export function updateCameraPosition(camera, playerPosition) {
-    // НАСТРОЙКА: X = 1.8 (сильно справа), Y = 3.2 (высоко), Z = 3.5 (сзади)
-    const targetOffset = new THREE.Vector3(2.8, 4.2, 4);
+    // ВОТ ТУТ МЕНЯТЬ ПОЛОЖЕНИЕ КАМЕРЫ (X, Y, Z)
+    const targetOffset = new THREE.Vector3(2.8, 3.9, 4);
     
-    targetOffset.applyAxisAngle(new THREE.Vector3(1, 0, 0), cameraPitch);
-    targetOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+    targetOffset.applyAxisAngle(new THREE.Vector3(1, 0, 0), cameraRotation.pitch);
+    targetOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraRotation.yaw);
     
     camera.position.copy(playerPosition).add(targetOffset);
     
+    // Смотрим строго в пространство перед игроком, чтобы не косить при ходьбе
     const lookTarget = playerPosition.clone().add(new THREE.Vector3(0, 1.5, 0));
     camera.lookAt(lookTarget);
 }
