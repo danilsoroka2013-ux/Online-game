@@ -21,7 +21,6 @@
         #playerCount { margin-top: 10px; }
         #startBtn { display: none; background: #51cf66; }
         #startBtn.show { display: inline-block; }
-        #gameInfo { position: absolute; top: 20px; left: 20px; color: #00ff00; font-size: 16px; z-index: 101; pointer-events: none; }
         
         /* Стили для чата */
         #chatInputContainer { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 102; display: none; }
@@ -48,7 +47,6 @@
     <button style="margin-top: 20px; background: #666;" onclick="backToMenu()">Назад</button>
 </div>
 
-<div id="gameInfo"></div>
 <div id="chatInputContainer">
     <input type="text" id="chatInput" placeholder="Введите сообщение и нажмите Enter..." maxlength="50">
 </div>
@@ -78,15 +76,17 @@
     let gameStarted = false;
     let isChatOpen = false;
     let syncInterval = null;
+    
+    // Массив для хранения частиц шлейфа
+    let particles = [];
 
     // WASD + русская раскладка
     document.addEventListener('keydown', (e) => {
-        if (isChatOpen && e.code !== 'Enter') return; // Блокируем ходьбу при открытом чате
+        if (isChatOpen && e.code !== 'Enter') return;
 
         const keyMap = {'KeyW': 'forward', 'KeyA': 'left', 'KeyS': 'backward', 'KeyD': 'right', 'KeyЦ': 'forward', 'KeyФ': 'left', 'KeyЫ': 'backward', 'KeyВ': 'right'};
         if (keyMap[e.code]) keys[keyMap[e.code]] = true;
 
-        // Чат на ENTER
         if (e.code === 'Enter' && gameStarted) {
             handleChatToggle();
         }
@@ -97,7 +97,6 @@
         if (keyMap[e.code]) keys[keyMap[e.code]] = false;
     });
 
-    // Мышь
     document.addEventListener('click', () => {
         if (gameStarted && !isChatOpen) {
             document.getElementById('canvas').requestPointerLock?.();
@@ -119,14 +118,12 @@
         const input = document.getElementById('chatInput');
 
         if (!isChatOpen) {
-            // Открываем чат
             isChatOpen = true;
-            keys = {}; // Сбрасываем движение
+            keys = {};
             document.exitPointerLock?.();
             container.style.display = 'block';
             input.focus();
         } else {
-            // Закрываем чат и отправляем сообщение
             isChatOpen = false;
             const text = input.value.trim();
             if (text) {
@@ -154,17 +151,27 @@
     function backToMenu() {
         document.getElementById('lobby').style.display = 'none';
         document.getElementById('menu').style.display = 'block';
-        if (roomId && playerRole === 'host') {
-            db.ref('rooms/' + roomId).remove();
+        resetGameSession();
+    }
+
+    function resetGameSession() {
+        gameStarted = false;
+        if (roomId) {
+            db.ref('rooms/' + roomId + '/players/' + playerId).remove();
+            if (playerRole === 'host') {
+                db.ref('rooms/' + roomId).remove();
+            }
         }
         if (syncInterval) clearInterval(syncInterval);
+        setTimeout(() => { location.reload(); }, 100);
     }
 
     function createRoom() {
         roomId = generateCode();
         playerRole = 'host';
 
-        db.ref('rooms/' + roomId).set({
+        const roomRef = db.ref('rooms/' + roomId);
+        roomRef.set({
             host: playerId,
             players: {[playerId]: true},
             started: false
@@ -172,6 +179,11 @@
             console.log('✅ Комната создана:', roomId);
             document.getElementById('codeInput').style.display = 'none';
             document.getElementById('roomCode').innerHTML = '<strong>Код: ' + roomId + '</strong>';
+            
+            // Настройка автовыхода при отключении хоста
+            db.ref('rooms/' + roomId + '/players/' + playerId).onDisconnect().remove();
+            roomRef.onDisconnect().remove();
+
             listenToRoom();
         }).catch(err => console.error('Ошибка Firebase:', err));
     }
@@ -191,6 +203,10 @@
                 if (playerCount < 2) {
                     roomId = code;
                     playerRole = 'guest';
+                    
+                    // Настройка автовыхода при отключении гостя
+                    db.ref('rooms/' + code + '/players/' + playerId).onDisconnect().remove();
+                    
                     db.ref('rooms/' + code + '/players/' + playerId).set(true);
                     console.log('✅ Присоединился к комнате:', code);
                     document.getElementById('codeInput').style.display = 'none';
@@ -206,18 +222,31 @@
 
     function listenToRoom() {
         db.ref('rooms/' + roomId).on('value', (snapshot) => {
-            if (snapshot.exists()) {
-                const room = snapshot.val();
-                const playerCount = Object.keys(room.players || {}).length;
-                document.getElementById('playerCount').innerHTML = 'Игроков: ' + playerCount + '/2';
-
-                if (playerCount === 2 && playerRole === 'host') {
-                    document.getElementById('startBtn').classList.add('show');
+            if (!snapshot.exists()) {
+                if (gameStarted) {
+                    alert('Игрок отключился. Возврат в меню.');
+                    resetGameSession();
                 }
+                return;
+            }
 
-                if (room.started && !gameStarted) {
-                    startGame();
-                }
+            const room = snapshot.val();
+            const currentPlayers = Object.keys(room.players || {});
+            document.getElementById('playerCount').innerHTML = 'Игроков: ' + currentPlayers.length + '/2';
+
+            // Если игра уже идет, а один игрок вышел из списка игроков комнаты
+            if (gameStarted && currentPlayers.length < 2) {
+                alert('Игрок вышел из игры!');
+                resetGameSession();
+                return;
+            }
+
+            if (currentPlayers.length === 2 && playerRole === 'host') {
+                document.getElementById('startBtn').classList.add('show');
+            }
+
+            if (room.started && !gameStarted) {
+                startGame();
             }
         });
     }
@@ -241,7 +270,7 @@
         const canvas = document.getElementById('canvas');
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0xaaccff);
-        scene.fog = new THREE.FogExp2(0xaaccff, 0.015); // Небольшой туман для атмосферы
+        scene.fog = new THREE.FogExp2(0xaaccff, 0.015);
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
@@ -262,7 +291,6 @@
         floor.rotation.x = -Math.PI / 2;
         scene.add(floor);
 
-        // --- ГЕНЕРАЦИЯ ОКРУЖЕНИЯ ---
         generateEnvironment();
 
         // Спавн игрока
@@ -270,25 +298,15 @@
         playerMesh = createPlayerMesh(startX, 0, 0, true);
         scene.add(playerMesh);
 
-        // Позиционируем камеру изначально
-        camera.position.set(startX, 1.9, 0.4); 
+        camera.position.set(startX, 1.9, -0.15); 
         camera.lookAt(playerRole === 'host' ? 15 : -15, 1.9, 0);
-
-        document.getElementById('gameInfo').innerHTML = `
-            <p>Режим: <strong>Solo</strong></p>
-            <p style="margin-top: 5px;">WASD — Ходьба | Мышь — Обзор</p>
-            <p style="margin-top: 5px; color: #ffeb3b;">Нажми ENTER чтобы писать в чат</p>
-        `;
 
         animate();
     }
 
     function generateEnvironment() {
-        // 1. Создаем деревья
         for (let i = 0; i < 20; i++) {
             const tree = new THREE.Group();
-            
-            // Ствол
             const trunk = new THREE.Mesh(
                 new THREE.CylinderGeometry(0.3, 0.5, 4, 8),
                 new THREE.MeshStandardMaterial({ color: 0x5a3d28, roughness: 0.9 })
@@ -296,7 +314,6 @@
             trunk.position.y = 2;
             tree.add(trunk);
 
-            // Листва
             const leaves = new THREE.Mesh(
                 new THREE.SphereGeometry(1.8, 8, 8),
                 new THREE.MeshStandardMaterial({ color: 0x2e6f40, roughness: 0.6 })
@@ -308,7 +325,6 @@
             scene.add(tree);
         }
 
-        // 2. Создаем камни
         for (let i = 0; i < 30; i++) {
             const size = 0.5 + Math.random() * 1.2;
             const rock = new THREE.Mesh(
@@ -322,11 +338,9 @@
             scene.add(rock);
         }
 
-        // 3. Создаем траву (пучки)
         for (let i = 0; i < 150; i++) {
             const grassGroup = new THREE.Group();
             const bladeMat = new THREE.MeshBasicMaterial({ color: 0x3d8c33 });
-            
             for(let j = 0; j < 3; j++) {
                 const blade = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.6, 4), bladeMat);
                 blade.position.set((Math.random()-0.5)*0.3, 0.3, (Math.random()-0.5)*0.3);
@@ -334,14 +348,12 @@
                 blade.rotation.x = (Math.random() - 0.5) * 0.4;
                 grassGroup.add(blade);
             }
-
             setRandomPosition(grassGroup, 5, 140);
             scene.add(grassGroup);
         }
     }
 
     function setRandomPosition(object, minDist, maxDist) {
-        // Распределяем объекты вокруг центра, чтобы они не спавнились прямо на игроках
         const angle = Math.random() * Math.PI * 2;
         const radius = minDist + Math.random() * (maxDist - minDist);
         object.position.x = Math.cos(angle) * radius;
@@ -351,50 +363,79 @@
     function createPlayerMesh(x, y, z, isLocal) {
         const group = new THREE.Group();
 
-        // Тело капсулы (цилиндр + полусферы)
+        // Контейнер поворота лица (чтобы развернуть глаза противоположно направлению по умолчанию)
+        const visualGroup = new THREE.Group();
+
         const bodyGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16);
         const bodyMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff, roughness: 0.5 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
         body.position.y = 1.4;
-        group.add(body);
+        visualGroup.add(body);
 
         const capGeo = new THREE.SphereGeometry(0.6, 16, 16);
         const topCap = new THREE.Mesh(capGeo, bodyMat);
         topCap.position.y = 2.3;
-        group.add(topCap);
+        visualGroup.add(topCap);
 
         const bottomCap = new THREE.Mesh(capGeo, bodyMat);
         bottomCap.position.y = 0.5;
-        group.add(bottomCap);
+        visualGroup.add(bottomCap);
 
-        // Глаза (смотрят вперед по оси +Z)
+        // Глаза (теперь смотрят вперед по направлению взгляда камеры)
         const eyeGeo = new THREE.SphereGeometry(0.14, 8, 8);
         const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
         const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-        leftEye.position.set(-0.25, 2.0, 0.52);
+        leftEye.position.set(-0.25, 2.0, -0.52);
         const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
-        leftPupil.position.set(-0.25, 2.0, 0.63);
-        group.add(leftEye);
-        group.add(leftPupil);
+        leftPupil.position.set(-0.25, 2.0, -0.63);
+        visualGroup.add(leftEye);
+        visualGroup.add(leftPupil);
 
         const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-        rightEye.position.set(0.25, 2.0, 0.52);
+        rightEye.position.set(0.25, 2.0, -0.52);
         const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
-        rightPupil.position.set(0.25, 2.0, 0.63);
-        group.add(rightEye);
-        group.add(rightPupil);
+        rightPupil.position.set(0.25, 2.0, -0.63);
+        visualGroup.add(rightEye);
+        visualGroup.add(rightPupil);
 
+        // Разворачиваем визуальную часть на 180 градусов, чтобы исправить баг "глаза на затылке"
+        visualGroup.rotation.y = Math.PI;
+
+        group.add(visualGroup);
         group.position.set(x, y, z);
         return group;
     }
 
-    // Создание 3D-текста над головой через Canvas-текстуру
+    // Создание шлейфа (частиц пыли под ногами)
+    function createTrailParticle(x, z) {
+        const geo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.6
+        });
+        const p = new THREE.Mesh(geo, mat);
+        p.position.set(x + (Math.random() - 0.5) * 0.4, 0.1, z + (Math.random() - 0.5) * 0.4);
+        scene.add(p);
+        
+        particles.push({
+            mesh: p,
+            life: 1.0, // Время жизни частицы
+            decay: 0.04 + Math.random() * 0.04 // Скорость исчезновения
+        });
+    }
+
+    // Чат с 30-секундным обратным отсчетом
     function show3DText(mesh, text) {
         if (!mesh) return;
+
+        let timeLeft = 30;
+        const chatIntervalName = "chatTimerIntervalID";
         
-        // Удаляем старое облако текста, если оно есть
+        // Счищаем предыдущие таймеры и облака текста на этом игроке
+        if (mesh[chatIntervalName]) clearInterval(mesh[chatIntervalName]);
         const oldText = mesh.getObjectByName("chatBubble");
         if (oldText) mesh.remove(oldText);
 
@@ -403,35 +444,49 @@
         canvas.width = 512;
         canvas.height = 128;
 
-        // Фон сообщения
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-        ctx.roundRect?.(10, 10, 492, 108, 15);
-        ctx.fill();
-        ctx.strokeStyle = '#51cf66';
-        ctx.lineWidth = 4;
-        ctx.stroke();
-
-        // Текст сообщения
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 24px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, 256, 64);
-
         const texture = new THREE.CanvasTexture(canvas);
         const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
         const sprite = new THREE.Sprite(spriteMat);
-        
         sprite.name = "chatBubble";
         sprite.scale.set(4, 1, 1);
-        sprite.position.set(0, 3.4, 0); // Высота над таблеткой
-
+        sprite.position.set(0, 3.4, 0);
         mesh.add(sprite);
 
-        // Удалить текст через 5 секунд
-        setTimeout(() => {
-            if (mesh && sprite) mesh.remove(sprite);
-        }, 5000);
+        function redraw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Отрисовка баббла
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+            ctx.roundRect?.(10, 10, 492, 108, 15);
+            ctx.fill();
+            ctx.strokeStyle = '#51cf66';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // Текст + Таймер под ним
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(text, 256, 50);
+            
+            ctx.fillStyle = '#ffeb3b';
+            ctx.font = '18px Arial';
+            ctx.fillText(`(${timeLeft}с)`, 256, 90);
+
+            texture.needsUpdate = true;
+        }
+
+        redraw();
+
+        mesh[chatIntervalName] = setInterval(() => {
+            timeLeft--;
+            if (timeLeft <= 0) {
+                clearInterval(mesh[chatIntervalName]);
+                if (mesh && sprite) mesh.remove(sprite);
+            } else {
+                redraw();
+            }
+        }, 1000);
     }
 
     function syncPlayers() {
@@ -445,29 +500,32 @@
                 if (keys.left) dir.x -= 1;
                 if (keys.right) dir.x += 1;
 
+                let isMoving = false;
                 if (dir.lengthSq() > 0) {
                     dir.normalize().multiplyScalar(speed);
                     dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
                     playerMesh.position.add(dir);
+                    isMoving = true;
+                    
+                    // Создаем частицу шлейфа под локальным игроком при движении
+                    createTrailParticle(playerMesh.position.x, playerMesh.position.z);
                 }
                 
-                // Вращаем тело персонажа за камерой по оси Y
                 playerMesh.rotation.y = camera.rotation.y;
 
-                // Камера от первого лица: ставим на уровень глаз и выдвигаем чуть-чуть вперед
-                const offset = new THREE.Vector3(0, 1.9, 0.15);
+                const offset = new THREE.Vector3(0, 1.9, -0.15);
                 offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
                 camera.position.copy(playerMesh.position).add(offset);
 
                 db.ref('rooms/' + roomId + '/pos/' + playerId).set({
                     x: Math.round(playerMesh.position.x * 100) / 100,
                     z: Math.round(playerMesh.position.z * 100) / 100,
-                    rotY: Math.round(playerMesh.rotation.y * 100) / 100
+                    rotY: Math.round(playerMesh.rotation.y * 100) / 100,
+                    isMoving: isMoving
                 });
             }
         }, 30);
 
-        // Слушаем позиции других игроков
         db.ref('rooms/' + roomId + '/pos').on('value', (snap) => {
             if (snap.exists() && scene) {
                 const pos = snap.val();
@@ -482,13 +540,16 @@
                             if(pos[id].rotY !== undefined) {
                                 otherPlayerMesh.rotation.y = pos[id].rotY;
                             }
+                            // Если другой игрок идет, создаем шлейф под его ногами
+                            if (pos[id].isMoving) {
+                                createTrailParticle(otherPlayerMesh.position.x, otherPlayerMesh.position.z);
+                            }
                         }
                     }
                 });
             }
         });
 
-        // Слушаем новые сообщения чата от других игроков
         db.ref('rooms/' + roomId + '/chats').on('child_changed', (snap) => {
             const data = snap.val();
             if (snap.key !== playerId && otherPlayerMesh) {
@@ -506,6 +567,23 @@
     function animate() {
         if (!renderer || !scene || !camera) return;
         requestAnimationFrame(animate);
+
+        // Обновление физики шлейфа частиц
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.life -= p.decay;
+            p.mesh.scale.set(p.life, p.life, p.life);
+            p.mesh.material.opacity = p.life * 0.6;
+            p.mesh.position.y += 0.01; // Частицы плавно поднимаются вверх
+            
+            if (p.life <= 0) {
+                scene.remove(p.mesh);
+                p.mesh.geometry.dispose();
+                p.mesh.material.dispose();
+                particles.splice(i, 1);
+            }
+        }
+
         renderer.render(scene, camera);
     }
 
