@@ -65,7 +65,7 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    console.log('✅ Firebase initialized');
+    console.log('✅ Firebase подключен');
 
     let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
     let roomId = null;
@@ -102,7 +102,7 @@
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === document.getElementById('canvas') && camera && !isChatOpen) {
             camera.rotation.order = 'YXZ';
-            // Нормальное вращение мыши (без горизонтальной инверсии)
+            // Стандартный классический FPS обзор мыши без инверсий
             camera.rotation.y -= e.movementX * 0.0025;
             camera.rotation.x -= e.movementY * 0.0025;
             if (camera.rotation.x > Math.PI / 2.2) camera.rotation.x = Math.PI / 2.2;
@@ -266,6 +266,8 @@
         scene.fog = new THREE.FogExp2(0xaaccff, 0.015);
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Камера рендерит только базовый слой (0), игнорируя слой (1), где находится наш меш
+        camera.layers.enable(0);
 
         renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -285,11 +287,17 @@
         generateEnvironment();
 
         const startX = playerRole === 'host' ? -15 : 15;
+        // Создаем своего персонажа
         playerMesh = createPlayerMesh(startX, 0, 0, true);
         scene.add(playerMesh);
 
-        // Камера инициируется внутри модели и смотрит вперед по оси -Z
-        camera.position.set(startX, 1.9, -0.05); 
+        // Прячем все части своего меша от собственной камеры (переносим на слой 1)
+        playerMesh.traverse(child => {
+            if(child.isMesh) child.layers.set(1);
+        });
+
+        // Ставим камеру точно по центру таблетки на уровень глаз
+        camera.position.set(startX, 1.9, 0); 
         camera.lookAt(playerRole === 'host' ? 15 : -15, 1.9, 0);
 
         animate();
@@ -369,7 +377,7 @@
         bottomCap.position.y = 0.5;
         group.add(bottomCap);
 
-        // Фикс: Переносим глаза на переднюю сторону по умолчанию в Three.js (ось -Z)
+        // Глаза направлены вперед по дефолтной оси -Z
         const eyeGeo = new THREE.SphereGeometry(0.14, 8, 8);
         const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
@@ -474,7 +482,7 @@
                 const speed = 0.16;
                 const dir = new THREE.Vector3();
 
-                // Фикс: WASD теперь полностью согласованы с направлением -Z (вперед)
+                // Классическое WASD движение по дефолтным осям Three.js
                 if (keys.forward) dir.z -= 1;
                 if (keys.backward) dir.z += 1;
                 if (keys.left) dir.x -= 1;
@@ -492,10 +500,9 @@
                 
                 playerMesh.rotation.y = camera.rotation.y;
 
-                // Камера сидит внутри головы, чуть-чуть смещена назад по -Z
-                const offset = new THREE.Vector3(0, 1.9, -0.05);
-                offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
-                camera.position.copy(playerMesh.position).add(offset);
+                // Камера строго по центру на высоте глаз
+                camera.position.copy(playerMesh.position);
+                camera.position.y = 1.9;
 
                 db.ref('rooms/' + roomId + '/pos/' + playerId).set({
                     x: Math.round(playerMesh.position.x * 100) / 100,
