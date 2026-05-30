@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FPS Game</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; overflow: hidden; background: #000; }
+        #canvas { display: block; width: 100%; height: 100vh; }
+        #menu, #lobby { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.95); padding: 40px; border-radius: 10px; text-align: center; color: white; z-index: 100; }
+        #lobby { display: none; }
+        h1 { font-size: 48px; margin-bottom: 30px; }
+        button { padding: 12px 30px; margin: 10px; font-size: 16px; cursor: pointer; background: #ff6b6b; border: none; color: white; border-radius: 5px; }
+        button:hover { background: #ff5252; }
+        input { padding: 10px; font-size: 16px; width: 280px; margin: 10px; border-radius: 5px; border: none; }
+        #roomCode { margin-top: 20px; font-size: 20px; color: #00ff00; }
+        #playerCount { margin-top: 10px; }
+        #startBtn { display: none; background: #51cf66; }
+        #startBtn.show { display: inline-block; }
+        #gameInfo { position: absolute; top: 20px; left: 20px; color: #00ff00; font-size: 16px; z-index: 101; }
+        .game-button { padding: 10px 25px; background: #51cf66; }
+        .game-button:hover { background: #40c057; }
+    </style>
+</head>
+<body>
+
+<div id="menu">
+    <h1>⚡ GAME</h1>
+    <button onclick="showLobby()">Играть</button>
+</div>
+
+<div id="lobby">
+    <h1>Лобби</h1>
+    <button onclick="createRoom()">Создать комнату</button>
+    <div style="margin-top: 30px;">
+        <input type="text" id="codeInput" placeholder="Код комнаты">
+        <button onclick="joinRoom()">Войти</button>
+    </div>
+    <div id="roomCode"></div>
+    <div id="playerCount"></div>
+    <button id="startBtn" onclick="startGame()">Запуск</button>
+    <button style="margin-top: 20px; background: #666;" onclick="backToMenu()">Назад</button>
+</div>
+
+<div id="gameInfo"></div>
+<canvas id="canvas"></canvas>
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyC9eNl5RdU8dIB1dM4uJ4-RbYbTdkl5L1w",
+        projectId: "game-6fe2f",
+        databaseURL: "https://game-6fe2f-default-rtdb.europe-west1.firebasedatabase.app",
+        storageBucket: "game-6fe2f.appspot.com",
+        messagingSenderId: "339159622379",
+        appId: "1:339159622379:web:25da4d0cc5dd13c44b0f85"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    console.log('✅ Firebase инициализирован');
+
+    let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
+    let roomId = null;
+    let playerRole = null;
+    let scene, camera, renderer, playerMesh, otherPlayerMesh;
+    let keys = {};
+    let gameStarted = false;
+    let syncInterval = null;
+
+    // WASD + русская раскладка
+    document.addEventListener('keydown', (e) => {
+        const keyMap = {'KeyW': 'forward', 'KeyA': 'left', 'KeyS': 'backward', 'KeyD': 'right'};
+        if (keyMap[e.code]) keys[keyMap[e.code]] = true;
+    });
+
+    document.addEventListener('keyup', (e) => {
+        const keyMap = {'KeyW': 'forward', 'KeyA': 'left', 'KeyS': 'backward', 'KeyD': 'right'};
+        if (keyMap[e.code]) keys[keyMap[e.code]] = false;
+    });
+
+    // Мышь
+    document.addEventListener('click', () => {
+        document.getElementById('canvas').requestPointerLock?.();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (document.pointerLockElement === document.getElementById('canvas') && camera) {
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y -= e.movementX * 0.003;
+            camera.rotation.x -= e.movementY * 0.003;
+            if (camera.rotation.x > Math.PI / 2) camera.rotation.x = Math.PI / 2;
+            if (camera.rotation.x < -Math.PI / 2) camera.rotation.x = -Math.PI / 2;
+        }
+    });
+
+    function generateCode() {
+        return Math.random().toString(36).substring(2, 8).toUpperCase();
+    }
+
+    function showLobby() {
+        document.getElementById('menu').style.display = 'none';
+        document.getElementById('lobby').style.display = 'block';
+    }
+
+    function backToMenu() {
+        document.getElementById('lobby').style.display = 'none';
+        document.getElementById('menu').style.display = 'block';
+        if (roomId) {
+            db.ref('rooms/' + roomId).remove();
+        }
+        if (syncInterval) clearInterval(syncInterval);
+    }
+
+    function createRoom() {
+        roomId = generateCode();
+        playerRole = 'host';
+
+        db.ref('rooms/' + roomId).set({
+            host: playerId,
+            players: {[playerId]: true},
+            started: false
+        }).then(() => {
+            console.log('✅ Комната создана:', roomId);
+            document.getElementById('codeInput').style.display = 'none';
+            document.getElementById('roomCode').innerHTML = '<strong>Код: ' + roomId + '</strong>';
+            listenToRoom();
+        }).catch(err => console.error('Ошибка Firebase:', err));
+    }
+
+    function joinRoom() {
+        const code = document.getElementById('codeInput').value.toUpperCase();
+        if (!code) {
+            alert('Введи код!');
+            return;
+        }
+
+        db.ref('rooms/' + code).once('value').then((snapshot) => {
+            if (snapshot.exists()) {
+                const room = snapshot.val();
+                const playerCount = Object.keys(room.players || {}).length;
+
+                if (playerCount < 2) {
+                    roomId = code;
+                    playerRole = 'guest';
+                    db.ref('rooms/' + code + '/players/' + playerId).set(true);
+                    console.log('✅ Присоединился к комнате:', code);
+                    document.getElementById('codeInput').style.display = 'none';
+                    listenToRoom();
+                } else {
+                    alert('Комната полна!');
+                }
+            } else {
+                alert('Комната не найдена!');
+            }
+        }).catch(err => console.error('Ошибка Firebase:', err));
+    }
+
+    function listenToRoom() {
+        db.ref('rooms/' + roomId).on('value', (snapshot) => {
+            if (snapshot.exists()) {
+                const room = snapshot.val();
+                const playerCount = Object.keys(room.players || {}).length;
+                document.getElementById('playerCount').innerHTML = 'Игроков: ' + playerCount + '/2';
+
+                if (playerCount === 2 && playerRole === 'host') {
+                    document.getElementById('startBtn').classList.add('show');
+                }
+
+                if (room.started && !gameStarted) {
+                    gameStarted = true;
+                    startGame();
+                }
+            }
+        });
+    }
+
+    function startGame() {
+        if (playerRole === 'host') {
+            db.ref('rooms/' + roomId + '/started').set(true);
+        }
+
+        document.getElementById('menu').style.display = 'none';
+        document.getElementById('lobby').style.display = 'none';
+        initThreeJS();
+        syncPlayers();
+    }
+
+    function initThreeJS() {
+        const canvas = document.getElementById('canvas');
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.6, 0);
+
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        // Свет
+        scene.add(new THREE.DirectionalLight(0xffffff, 1));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+        // Пол
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(200, 200),
+            new THREE.MeshBasicMaterial({ color: 0x90ee90 })
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = 0;
+        scene.add(floor);
+
+        // Спавн себя
+        const isFirst = Math.random() > 0.5;
+        playerMesh = createPlayerMesh(isFirst ? -5 : 5, 0, 0, true);
+        scene.add(playerMesh);
+
+        document.getElementById('gameInfo').innerHTML = `
+            <button class="game-button" onclick="selectMode('duo')">Дуо</button>
+            <button class="game-button" onclick="selectMode('solo')">Соло</button>
+            <p style="margin-top: 15px;">WASD + Мышь</p>
+        `;
+
+        animate();
+    }
+
+    function createPlayerMesh(x, y, z, isLocal) {
+        const group = new THREE.Group();
+
+        const body = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.8, 3),
+            new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff })
+        );
+
+        const eyeGeo = new THREE.SphereGeometry(0.3, 8, 8);
+        const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+
+        const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+        leftEye.position.set(-0.3, 0.8, 1.2);
+
+        const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+        rightEye.position.set(0.3, 0.8, 1.2);
+
+        group.add(body);
+        group.add(leftEye);
+        group.add(rightEye);
+        group.position.set(x, y, z);
+
+        return group;
+    }
+
+    function selectMode(mode) {
+        document.getElementById('gameInfo').innerHTML = '<p>Режим: <strong>' + mode + '</strong></p><p>WASD + Мышь</p>';
+    }
+
+    function syncPlayers() {
+        syncInterval = setInterval(() => {
+            if (playerMesh && gameStarted) {
+                const speed = 0.15;
+                const dir = new THREE.Vector3();
+
+                if (keys.forward) dir.z -= 1;
+                if (keys.backward) dir.z += 1;
+                if (keys.left) dir.x -= 1;
+                if (keys.right) dir.x += 1;
+
+                dir.normalize().multiplyScalar(speed);
+                dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
+                playerMesh.position.add(dir);
+
+                db.ref('rooms/' + roomId + '/pos/' + playerId).set({
+                    x: Math.round(playerMesh.position.x * 100) / 100,
+                    z: Math.round(playerMesh.position.z * 100) / 100
+                });
+            }
+        }, 50);
+
+        db.ref('rooms/' + roomId + '/pos').on('value', (snap) => {
+            if (snap.exists()) {
+                const pos = snap.val();
+                Object.keys(pos).forEach(id => {
+                    if (id !== playerId) {
+                        if (!otherPlayerMesh) {
+                            otherPlayerMesh = createPlayerMesh(pos[id].x, 0, pos[id].z, false);
+                            scene.add(otherPlayerMesh);
+                        } else {
+                            otherPlayerMesh.position.x = pos[id].x;
+                            otherPlayerMesh.position.z = pos[id].z;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+
+</body>
+</html>
