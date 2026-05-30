@@ -3,332 +3,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Game</title>
-    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+    <title>Firebase Колобки</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; overflow: hidden; background: #000; }
-        #canvas { display: block; width: 100%; height: 100vh; }
-        #menu, #lobby { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.95); padding: 40px; border-radius: 10px; text-align: center; color: white; z-index: 100; }
-        #lobby { display: none; }
-        h1 { font-size: 48px; margin-bottom: 30px; }
-        button { padding: 12px 30px; margin: 10px; font-size: 16px; cursor: pointer; background: #ff6b6b; border: none; color: white; border-radius: 5px; }
-        button:hover { background: #ff5252; }
-        input { padding: 10px; font-size: 16px; width: 280px; margin: 10px; border-radius: 5px; border: none; color: #000; }
-        #roomCode { margin-top: 20px; font-size: 20px; color: #00ff00; }
-        #playerCount { margin-top: 10px; }
-        #startBtn { display: none; background: #51cf66; }
-        #startBtn.show { display: inline-block; }
-        #chatInputContainer { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 102; display: none; }
-        #chatInput { width: 400px; padding: 12px; background: rgba(0,0,0,0.8); border: 2px solid #51cf66; color: white; font-size: 16px; border-radius: 5px; outline: none; }
+        body, html { margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; background: #222; }
+        #canvas-container { width: 100vw; height: 100vh; display: none; }
+        
+        /* Экран ожидания */
+        #lobby {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8); color: white; padding: 30px; border-radius: 10px; text-align: center;
+        }
+        button { padding: 10px 20px; font-size: 18px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; }
+        button:disabled { background: #555; cursor: not-allowed; }
+
+        /* Чат */
+        #chat-container {
+            position: absolute; bottom: 20px; left: 20px; width: 300px;
+            display: none; flex-direction: column; pointer-events: none;
+        }
+        #chat-input {
+            width: 100%; padding: 8px; background: rgba(0,0,0,0.6); border: 1px solid #555;
+            color: white; border-radius: 4px; pointer-events: auto; outline: none; display: none;
+        }
+        /* Область над головами (баблы сообщений) */
+        .chat-bubble {
+            position: absolute; background: rgba(255,255,255,0.9); color: black;
+            padding: 5px 10px; border-radius: 8px; font-size: 14px; font-weight: bold;
+            transform: translate(-50%, -100%); pointer-events: none; white-space: nowrap;
+            border: 1px solid #ccc; transition: opacity 0.3s;
+        }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
 <body>
 
-<div id="menu">
-    <h1>⚡ GAME</h1>
-    <button id="playBtn">Играть</button>
-</div>
-
-<div id="lobby">
-    <h1>Лобби</h1>
-    <button id="createRoomBtn">Создать комнату</button>
-    <div style="margin-top: 30px;">
-        <input type="text" id="codeInput" placeholder="Код комнаты">
-        <button id="joinRoomBtn">Войти</button>
+    <div id="lobby">
+        <h2>Комната ожидания</h2>
+        <p id="player-count">Игроков в сети: 0 / 3</p>
+        <div id="players-list" style="margin-bottom: 20px;"></div>
+        <button id="start-btn" disabled>Запуск (Только для Создателя)</button>
     </div>
-    <div id="roomCode"></div>
-    <div id="playerCount"></div>
-    <button id="startBtn">Запуск</button>
-    <button id="backBtn" style="margin-top: 20px; background: #666;">Назад</button>
-</div>
 
-<div id="chatInputContainer">
-    <input type="text" id="chatInput" placeholder="Введите сообщение и нажмите Enter..." maxlength="50">
-</div>
-
-<canvas id="canvas"></canvas>
-
-<script type="module">
-    import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
-    import { keys, initControls, resetKeys } from './control.js';
-    import { initCameraRotation, setInitialYaw, updateCameraPosition, cameraRotation } from './camera.js';
-    import { generateEnvironment, checkCollisions } from './world.js';
-    import { initTakeMechanic, carryState, updateThrowPhysics } from './take.js';
-
-    const firebaseConfig = {
-        apiKey: "AIzaSyC9eNl5RdU8dIB1dM4uJ4-RbYbTdkl5L1w",
-        projectId: "game-6fe2f",
-        databaseURL: "https://game-6fe2f-default-rtdb.europe-west1.firebasedatabase.app",
-        storageBucket: "game-6fe2f.appspot.com",
-        messagingSenderId: "339159622379",
-        appId: "1:339159622379:web:25da4d0cc5dd13c44b0f85"
-    };
-
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
-
-    let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
-    let otherPlayerId = null;
-    let roomId = null;
-    let playerRole = null;
-    let scene, camera, renderer, playerMesh, otherPlayerMesh;
-    let gameStarted = false;
-    let isChatOpen = false;
-    let syncInterval = null;
-    let particles = [];
-
-    document.getElementById('playBtn').addEventListener('click', showLobby);
-    document.getElementById('createRoomBtn').addEventListener('click', createRoom);
-    document.getElementById('joinRoomBtn').addEventListener('click', joinRoom);
-    document.getElementById('startBtn').addEventListener('click', startGame);
-    document.getElementById('backBtn').addEventListener('click', backToMenu);
-
-    initControls(() => isChatOpen);
-    initCameraRotation(document.getElementById('canvas'), () => isChatOpen);
+    <div id="canvas-container"></div>
     
-    initTakeMechanic(db, () => roomId, playerId, () => otherPlayerId, () => playerMesh, () => otherPlayerMesh, cameraRotation);
+    <div id="chat-container">
+        <input type="text" id="chat-input" placeholder="Нажмите Enter для отправки..." maxlength="50">
+    </div>
 
-    document.addEventListener('keydown', (e) => {
-        if (e.code === 'Enter' && gameStarted) handleChatToggle();
-    });
+    <script>
+        // КОНФИГ FIREBASE: Вставьте сюда свои данные из консоли Firebase!
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            databaseURL: "YOUR_DATABASE_URL",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+    </script>
 
-    function handleChatToggle() {
-        const container = document.getElementById('chatInputContainer');
-        const input = document.getElementById('chatInput');
-        if (!isChatOpen) {
-            isChatOpen = true; resetKeys(); document.exitPointerLock?.();
-            container.style.display = 'block'; input.focus();
-        } else {
-            isChatOpen = false; const text = input.value.trim();
-            if (text) {
-                db.ref('rooms/' + roomId + '/chats/' + playerId).set({ text: text, timestamp: Date.now() });
-                show3DText(playerMesh, text);
-            }
-            input.value = ''; container.style.display = 'none';
-            document.getElementById('canvas').requestPointerLock?.();
-        }
-    }
-
-    function generateCode() { return Math.random().toString(36).substring(2, 8).toUpperCase(); }
-    function showLobby() { document.getElementById('menu').style.display = 'none'; document.getElementById('lobby').style.display = 'block'; }
-    function backToMenu() { document.getElementById('lobby').style.display = 'none'; document.getElementById('menu').style.display = 'block'; resetGameSession(); }
-
-    function resetGameSession() {
-        gameStarted = false;
-        if (roomId) {
-            db.ref('rooms/' + roomId + '/players/' + playerId).remove();
-            if (playerRole === 'host') db.ref('rooms/' + roomId).remove();
-        }
-        if (syncInterval) clearInterval(syncInterval);
-        setTimeout(() => { location.reload(); }, 100);
-    }
-
-    function createRoom() {
-        roomId = generateCode(); playerRole = 'host';
-        const roomRef = db.ref('rooms/' + roomId);
-        roomRef.set({ host: playerId, players: {[playerId]: true}, started: false }).then(() => {
-            document.getElementById('codeInput').style.display = 'none';
-            document.getElementById('roomCode').innerHTML = '<strong>Код: ' + roomId + '</strong>';
-            listenToRoom();
-        });
-    }
-
-    function joinRoom() {
-        const code = document.getElementById('codeInput').value.toUpperCase();
-        if (!code) return alert('Введи код!');
-        db.ref('rooms/' + code).once('value').then((snapshot) => {
-            if (snapshot.exists()) {
-                roomId = code; playerRole = 'guest';
-                db.ref('rooms/' + code + '/players/' + playerId).set(true);
-                document.getElementById('codeInput').style.display = 'none';
-                listenToRoom();
-            } else { alert('Комната не найдена!'); }
-        });
-    }
-
-    function listenToRoom() {
-        db.ref('rooms/' + roomId).on('value', (snapshot) => {
-            if (!snapshot.exists()) { if (gameStarted) resetGameSession(); return; }
-            const room = snapshot.val();
-            const currentPlayers = Object.keys(room.players || {});
-            document.getElementById('playerCount').innerHTML = 'Игроков: ' + currentPlayers.length + '/2';
-            
-            currentPlayers.forEach(id => { if(id !== playerId) otherPlayerId = id; });
-
-            if (currentPlayers.length === 2 && playerRole === 'host') document.getElementById('startBtn').classList.add('show');
-            if (room.started && !gameStarted) startGame();
-        });
-    }
-
-    function startGame() {
-        if (gameStarted) return;
-        gameStarted = true;
-        if (playerRole === 'host') db.ref('rooms/' + roomId + '/started').set(true);
-        document.getElementById('menu').style.display = 'none';
-        document.getElementById('lobby').style.display = 'none';
-        initThreeJS();
-        syncPlayers();
-    }
-
-    function initThreeJS() {
-        const canvas = document.getElementById('canvas');
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0xaaccff);
-        scene.fog = new THREE.FogExp2(0xaaccff, 0.015);
-
-        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-        dirLight.position.set(20, 40, 20); scene.add(dirLight);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-
-        const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0x55aa44, roughness: 0.9 }));
-        floor.rotation.x = -Math.PI / 2; scene.add(floor);
-
-        generateEnvironment(scene);
-
-        const startX = playerRole === 'host' ? -5 : 5;
-        playerMesh = createPlayerMesh(startX, 0, 0, true);
-        scene.add(playerMesh);
-
-        const startYaw = playerRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
-        setInitialYaw(startYaw);
-
-        animate();
-    }
-
-    function createPlayerMesh(x, y, z, isLocal) {
-        const group = new THREE.Group();
-        const bodyMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff, roughness: 0.5 });
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16), bodyMat);
-        body.position.y = 1.4; group.add(body);
-        const topCap = new THREE.Mesh(new THREE.SphereGeometry(0.6, 16, 16), bodyMat); topCap.position.y = 2.3; group.add(topCap);
-        const bottomCap = new THREE.Mesh(new THREE.SphereGeometry(0.6, 16, 16), bodyMat); bottomCap.position.y = 0.5; group.add(bottomCap);
-        group.position.set(x, y, z);
-        return group;
-    }
-
-    function createTrailParticle(x, z) {
-        const p = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
-        p.position.set(x + (Math.random() - 0.5) * 0.4, 0.1, z + (Math.random() - 0.5) * 0.4);
-        scene.add(p);
-        particles.push({ mesh: p, life: 1.0, decay: 0.05 });
-    }
-
-    function show3DText(mesh, text) {
-        if (!mesh) return;
-        if (mesh.chatTimerIntervalID) clearInterval(mesh.chatTimerIntervalID);
-        const oldText = mesh.getObjectByName("chatBubble"); if (oldText) mesh.remove(oldText);
-        const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
-        canvas.width = 512; canvas.height = 128;
-        const texture = new THREE.CanvasTexture(canvas);
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true }));
-        sprite.name = "chatBubble"; sprite.scale.set(4, 1, 1); sprite.position.set(0, 3.4, 0); mesh.add(sprite);
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.roundRect?.(10, 10, 492, 108, 15); ctx.fill();
-        ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, 256, 60);
-        texture.needsUpdate = true;
-        mesh.chatTimerIntervalID = setTimeout(() => { mesh.remove(sprite); }, 4000);
-    }
-
-    function syncPlayers() {
-        syncInterval = setInterval(() => {
-            if (playerMesh && gameStarted && camera) {
-                let isMoving = false;
-
-                if (!carryState.isBeingCarried && !carryState.throwVelocity) {
-                    const speed = 0.16;
-                    const moveVector = new THREE.Vector3();
-
-                    if (keys.forward) moveVector.z -= 1;
-                    if (keys.backward) moveVector.z += 1;
-                    if (keys.left) moveVector.x -= 1;
-                    if (keys.right) moveVector.x += 1;
-
-                    if (moveVector.lengthSq() > 0) {
-                        moveVector.normalize().multiplyScalar(speed);
-                        // Движение строго по направлению взгляда yaw
-                        moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraRotation.yaw);
-                        playerMesh.position.add(moveVector);
-                        isMoving = true;
-                        
-                        createTrailParticle(playerMesh.position.x, playerMesh.position.z);
-                    }
-                    playerMesh.rotation.y = cameraRotation.yaw;
-                }
-
-                // КОРРЕКЦИЯ КОЛЛИЗИЙ ИГРОКА (Деревья, камни)
-                const corrected = checkCollisions(playerMesh.position, 0.6);
-                playerMesh.position.copy(corrected);
-
-                if (carryState.isBeingCarried && otherPlayerMesh) {
-                    updateCameraPosition(camera, otherPlayerMesh.position);
-                } else {
-                    updateCameraPosition(camera, playerMesh.position);
-                }
-
-                updateThrowPhysics(playerMesh, checkCollisions);
-
-                db.ref('rooms/' + roomId + '/pos/' + playerId).set({
-                    x: Math.round(playerMesh.position.x * 100) / 100,
-                    y: Math.round(playerMesh.position.y * 100) / 100,
-                    z: Math.round(playerMesh.position.z * 100) / 100,
-                    rotY: Math.round(playerMesh.rotation.y * 100) / 100,
-                    isMoving: isMoving
-                });
-            }
-        }, 30);
-
-        db.ref('rooms/' + roomId + '/pos').on('value', (snap) => {
-            if (snap.exists() && scene) {
-                const pos = snap.val();
-                Object.keys(pos).forEach(id => {
-                    if (id !== playerId) {
-                        if (!otherPlayerMesh) {
-                            otherPlayerMesh = createPlayerMesh(pos[id].x, pos[id].y || 0, pos[id].z, false);
-                            scene.add(otherPlayerMesh);
-                        } else {
-                            if (carryState.isCarrying) {
-                                otherPlayerMesh.position.copy(playerMesh.position);
-                                otherPlayerMesh.position.y += 2.4; 
-                                otherPlayerMesh.rotation.y = playerMesh.rotation.y + Math.PI/2;
-                                otherPlayerMesh.rotation.z = Math.PI / 2; 
-                            } else {
-                                otherPlayerMesh.position.x = pos[id].x;
-                                otherPlayerMesh.position.y = pos[id].y || 0;
-                                otherPlayerMesh.position.z = pos[id].z;
-                                otherPlayerMesh.rotation.y = pos[id].rotY;
-                                otherPlayerMesh.rotation.z = (pos[id].y > 0.1) ? Math.PI / 2 : 0;
-                            }
-                            if (pos[id].isMoving) createTrailParticle(otherPlayerMesh.position.x, otherPlayerMesh.position.z);
-                        }
-                    }
-                });
-            }
-        });
-
-        db.ref('rooms/' + roomId + '/chats').on('child_added', (snap) => {
-            const data = snap.val(); if (snap.key !== playerId && otherPlayerMesh) show3DText(otherPlayerMesh, data.text);
-        });
-    }
-
-    function animate() {
-        if (!renderer || !scene || !camera) return;
-        requestAnimationFrame(animate);
-        for (let i = particles.length - 1; i >= 0; i--) {
-            let p = particles[i]; p.life -= p.decay; p.mesh.scale.set(p.life, p.life, p.life);
-            if (p.life <= 0) { scene.remove(p.mesh); particles.splice(i, 1); }
-        }
-        renderer.render(scene, camera);
-    }
-
-    window.addEventListener('resize', () => {
-        if (camera && renderer) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
-    });
-</script>
-
+    <script src="take.js"></script>
+    <script src="world.js"></script>
+    <script src="control.js"></script>
+    <script src="camera.js"></script>
 </body>
 </html>
