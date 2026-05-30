@@ -65,6 +65,8 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
+    console.log('✅ Firebase подключен');
+
     let playerId = 'player_' + Math.random().toString(36).substr(2, 9);
     let roomId = null;
     let playerRole = null;
@@ -75,15 +77,19 @@
     let syncInterval = null;
     let particles = [];
 
-    // Повороты мыши (накапливаем углы локально, чтобы не было дерготни)
+    // Локальные углы поворота для плавной синхронизации осей
     let yaw = 0;
     let pitch = 0;
 
     document.addEventListener('keydown', (e) => {
         if (isChatOpen && e.code !== 'Enter') return;
+
         const keyMap = {'KeyW': 'forward', 'KeyA': 'left', 'KeyS': 'backward', 'KeyD': 'right', 'KeyЦ': 'forward', 'KeyФ': 'left', 'KeyЫ': 'backward', 'KeyВ': 'right'};
         if (keyMap[e.code]) keys[keyMap[e.code]] = true;
-        if (e.code === 'Enter' && gameStarted) handleChatToggle();
+
+        if (e.code === 'Enter' && gameStarted) {
+            handleChatToggle();
+        }
     });
 
     document.addEventListener('keyup', (e) => {
@@ -92,12 +98,14 @@
     });
 
     document.addEventListener('click', () => {
-        if (gameStarted && !isChatOpen) document.getElementById('canvas').requestPointerLock?.();
+        if (gameStarted && !isChatOpen) {
+            document.getElementById('canvas').requestPointerLock?.();
+        }
     });
 
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === document.getElementById('canvas') && camera && !isChatOpen) {
-            // Стандартное FPS вращение для обоих без инверсий
+            // ИСПРАВЛЕНО: Прямое накопление углов вращения мыши без инверсий
             yaw -= e.movementX * 0.0025;
             pitch -= e.movementY * 0.0025;
             
@@ -111,6 +119,7 @@
     function handleChatToggle() {
         const container = document.getElementById('chatInputContainer');
         const input = document.getElementById('chatInput');
+
         if (!isChatOpen) {
             isChatOpen = true;
             keys = {};
@@ -121,7 +130,10 @@
             isChatOpen = false;
             const text = input.value.trim();
             if (text) {
-                db.ref('rooms/' + roomId + '/chats/' + playerId).set({ text: text, timestamp: Date.now() });
+                db.ref('rooms/' + roomId + '/chats/' + playerId).set({
+                    text: text,
+                    timestamp: Date.now()
+                });
                 show3DText(playerMesh, text);
             }
             input.value = '';
@@ -130,15 +142,28 @@
         }
     }
 
-    function generateCode() { return Math.random().toString(36).substring(2, 8).toUpperCase(); }
-    function showLobby() { document.getElementById('menu').style.display = 'none'; document.getElementById('lobby').style.display = 'block'; }
-    function backToMenu() { document.getElementById('lobby').style.display = 'none'; document.getElementById('menu').style.display = 'block'; resetGameSession(); }
+    function generateCode() {
+        return Math.random().toString(36).substring(2, 8).toUpperCase();
+    }
+
+    function showLobby() {
+        document.getElementById('menu').style.display = 'none';
+        document.getElementById('lobby').style.display = 'block';
+    }
+
+    function backToMenu() {
+        document.getElementById('lobby').style.display = 'none';
+        document.getElementById('menu').style.display = 'block';
+        resetGameSession();
+    }
 
     function resetGameSession() {
         gameStarted = false;
         if (roomId) {
             db.ref('rooms/' + roomId + '/players/' + playerId).remove();
-            if (playerRole === 'host') db.ref('rooms/' + roomId).remove();
+            if (playerRole === 'host') {
+                db.ref('rooms/' + roomId).remove();
+            }
         }
         if (syncInterval) clearInterval(syncInterval);
         setTimeout(() => { location.reload(); }, 100);
@@ -147,52 +172,95 @@
     function createRoom() {
         roomId = generateCode();
         playerRole = 'host';
+
         const roomRef = db.ref('rooms/' + roomId);
-        roomRef.set({ host: playerId, players: {[playerId]: true}, started: false }).then(() => {
+        roomRef.set({
+            host: playerId,
+            players: {[playerId]: true},
+            started: false
+        }).then(() => {
+            console.log('✅ Комната создана:', roomId);
             document.getElementById('codeInput').style.display = 'none';
             document.getElementById('roomCode').innerHTML = '<strong>Код: ' + roomId + '</strong>';
+            
             db.ref('rooms/' + roomId + '/players/' + playerId).onDisconnect().remove();
             roomRef.onDisconnect().remove();
+
             listenToRoom();
-        });
+        }).catch(err => console.error('Ошибка Firebase:', err));
     }
 
     function joinRoom() {
         const code = document.getElementById('codeInput').value.toUpperCase();
-        if (!code) return alert('Введи код!');
+        if (!code) {
+            alert('Введи код!');
+            return;
+        }
+
         db.ref('rooms/' + code).once('value').then((snapshot) => {
             if (snapshot.exists()) {
                 const room = snapshot.val();
-                if (Object.keys(room.players || {}).length < 2) {
+                const playerCount = Object.keys(room.players || {}).length;
+
+                if (playerCount < 2) {
                     roomId = code;
                     playerRole = 'guest';
+                    
                     db.ref('rooms/' + code + '/players/' + playerId).onDisconnect().remove();
                     db.ref('rooms/' + code + '/players/' + playerId).set(true);
+                    console.log('✅ Присоединился к комнате:', code);
                     document.getElementById('codeInput').style.display = 'none';
                     listenToRoom();
-                } else { alert('Комната полна!'); }
-            } else { alert('Комната не найдена!'); }
-        });
+                } else {
+                    alert('Комната полна!');
+                }
+            } else {
+                alert('Комната не найдена!');
+            }
+        }).catch(err => console.error('Ошибка Firebase:', err));
     }
 
     function listenToRoom() {
         db.ref('rooms/' + roomId).on('value', (snapshot) => {
-            if (!snapshot.exists()) { if (gameStarted) { alert('Игрок отключился.'); resetGameSession(); } return; }
+            if (!snapshot.exists()) {
+                if (gameStarted) {
+                    alert('Игрок отключился. Возврат в меню.');
+                    resetGameSession();
+                }
+                return;
+            }
+
             const room = snapshot.val();
             const currentPlayers = Object.keys(room.players || {});
             document.getElementById('playerCount').innerHTML = 'Игроков: ' + currentPlayers.length + '/2';
-            if (gameStarted && currentPlayers.length < 2) { alert('Игрок вышел!'); resetGameSession(); return; }
-            if (currentPlayers.length === 2 && playerRole === 'host') document.getElementById('startBtn').classList.add('show');
-            if (room.started && !gameStarted) startGame();
+
+            if (gameStarted && currentPlayers.length < 2) {
+                alert('Игрок вышел из игры!');
+                resetGameSession();
+                return;
+            }
+
+            if (currentPlayers.length === 2 && playerRole === 'host') {
+                document.getElementById('startBtn').classList.add('show');
+            }
+
+            if (room.started && !gameStarted) {
+                startGame();
+            }
         });
     }
 
     function startGame() {
         if (gameStarted) return;
         gameStarted = true;
-        if (playerRole === 'host') db.ref('rooms/' + roomId + '/started').set(true);
+
+        if (playerRole === 'host') {
+            db.ref('rooms/' + roomId + '/started').set(true);
+        }
+
         document.getElementById('menu').style.display = 'none';
         document.getElementById('lobby').style.display = 'none';
+        
         initThreeJS();
         syncPlayers();
     }
@@ -213,79 +281,129 @@
         scene.add(dirLight);
         scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-        const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0x55aa44, roughness: 0.9 }));
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(300, 300),
+            new THREE.MeshStandardMaterial({ color: 0x55aa44, roughness: 0.9 })
+        );
         floor.rotation.x = -Math.PI / 2;
         scene.add(floor);
 
         generateEnvironment();
 
-        // Спавн лицом друг к другу
+        // ИСПРАВЛЕНО: Спавним игроков сразу развернутыми лицом друг к другу
         const startX = playerRole === 'host' ? -15 : 15;
-        // Изначальный разворот меша: хост смотрит в +X, гость в -X (друг на друга)
         const startRotY = playerRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
 
         playerMesh = createPlayerMesh(startX, 0, 0, true);
         playerMesh.rotation.y = startRotY;
         scene.add(playerMesh);
 
-        // Инициализируем углы камеры в зависимости от роли, чтобы смотреть на соперника
+        // Задаем камере начальное верное направление взгляда
         yaw = startRotY;
         pitch = 0;
         camera.rotation.set(pitch, yaw, 0, 'YXZ');
 
-        // Камера сзади на расстоянии 2 для обоих игроков
-        const offset = new THREE.Vector3(0, 1.9, 2.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-        camera.position.copy(playerMesh.position).add(offset);
+        // ИСПРАВЛЕНО: Камера изначально жестко сзади на расстоянии 2 для обоих игроков
+        const cameraOffset = new THREE.Vector3(0, 1.9, 2.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        camera.position.copy(playerMesh.position).add(cameraOffset);
 
         animate();
     }
 
     function generateEnvironment() {
+        // ВОЗВРАЩЕНО: Полный код генерации деревьев
         for (let i = 0; i < 20; i++) {
             const tree = new THREE.Group();
-            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.5, 4, 8), new THREE.MeshStandardMaterial({ color: 0x5a3d28, roughness: 0.9 }));
-            trunk.position.y = 2; tree.add(trunk);
-            const leaves = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 8), new THREE.MeshStandardMaterial({ color: 0x2e6f40, roughness: 0.6 }));
-            leaves.position.y = 4.5; tree.add(leaves);
-            setRandomPosition(tree, 15, 120); scene.add(tree);
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.3, 0.5, 4, 8),
+                new THREE.MeshStandardMaterial({ color: 0x5a3d28, roughness: 0.9 })
+            );
+            trunk.position.y = 2;
+            tree.add(trunk);
+
+            const leaves = new THREE.Mesh(
+                new THREE.SphereGeometry(1.8, 8, 8),
+                new THREE.MeshStandardMaterial({ color: 0x2e6f40, roughness: 0.6 })
+            );
+            leaves.position.y = 4.5;
+            tree.add(leaves);
+
+            setRandomPosition(tree, 15, 120);
+            scene.add(tree);
         }
+
+        // ВОЗВРАЩЕНО: Полный код генерации камней
         for (let i = 0; i < 30; i++) {
             const size = 0.5 + Math.random() * 1.2;
-            const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size), new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 }));
-            rock.position.y = size * 0.5; rock.scale.set(1, 0.7 + Math.random()*0.5, 1);
-            setRandomPosition(rock, 10, 130); scene.add(rock);
+            const rock = new THREE.Mesh(
+                new THREE.DodecahedronGeometry(size),
+                new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 })
+            );
+            rock.position.y = size * 0.5;
+            rock.scale.set(1, 0.7 + Math.random()*0.5, 1);
+            
+            setRandomPosition(rock, 10, 130);
+            scene.add(rock);
+        }
+
+        // ВОЗВРАЩЕНО: Полный код генерации травы
+        for (let i = 0; i < 150; i++) {
+            const grassGroup = new THREE.Group();
+            const bladeMat = new THREE.MeshBasicMaterial({ color: 0x3d8c33 });
+            for(let j = 0; j < 3; j++) {
+                const blade = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.6, 4), bladeMat);
+                blade.position.set((Math.random()-0.5)*0.3, 0.3, (Math.random()-0.5)*0.3);
+                blade.rotation.z = (Math.random() - 0.5) * 0.4;
+                blade.rotation.x = (Math.random() - 0.5) * 0.4;
+                grassGroup.add(blade);
+            }
+            setRandomPosition(grassGroup, 5, 140);
+            scene.add(grassGroup);
         }
     }
 
     function setRandomPosition(object, minDist, maxDist) {
         const angle = Math.random() * Math.PI * 2;
         const radius = minDist + Math.random() * (maxDist - minDist);
-        object.position.x = Math.cos(angle) * radius; object.position.z = Math.sin(angle) * radius;
+        object.position.x = Math.cos(angle) * radius;
+        object.position.z = Math.sin(angle) * radius;
     }
 
     function createPlayerMesh(x, y, z, isLocal) {
         const group = new THREE.Group();
+
         const bodyGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16);
         const bodyMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff, roughness: 0.5 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.y = 1.4; group.add(body);
+        body.position.y = 1.4;
+        group.add(body);
 
         const capGeo = new THREE.SphereGeometry(0.6, 16, 16);
-        const topCap = new THREE.Mesh(capGeo, bodyMat); topCap.position.y = 2.3; group.add(topCap);
-        const bottomCap = new THREE.Mesh(capGeo, bodyMat); bottomCap.position.y = 0.5; group.add(bottomCap);
+        const topCap = new THREE.Mesh(capGeo, bodyMat);
+        topCap.position.y = 2.3;
+        group.add(topCap);
 
-        // Глаза смотрят вперед (по оси -Z локально для меша)
+        const bottomCap = new THREE.Mesh(capGeo, bodyMat);
+        bottomCap.position.y = 0.5;
+        group.add(bottomCap);
+
         const eyeGeo = new THREE.SphereGeometry(0.14, 8, 8);
         const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-        const leftEye = new THREE.Mesh(eyeGeo, eyeMat); leftEye.position.set(-0.25, 2.0, -0.52);
-        const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat); leftPupil.position.set(-0.25, 2.0, -0.63);
-        group.add(leftEye); group.add(leftPupil);
+        const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+        leftEye.position.set(-0.25, 2.0, -0.52);
+        const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
+        leftPupil.position.set(-0.25, 2.0, -0.63);
+        group.add(leftEye);
+        group.add(leftPupil);
 
-        const rightEye = new THREE.Mesh(eyeGeo, eyeMat); rightEye.position.set(0.25, 2.0, -0.52);
-        const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat); rightPupil.position.set(0.25, 2.0, -0.63);
-        group.add(rightEye); group.add(rightPupil);
+        const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+        rightEye.position.set(0.25, 2.0, -0.52);
+        const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
+        rightPupil.position.set(0.25, 2.0, -0.63);
+        group.add(rightEye);
+        group.add(rightPupil);
 
         group.position.set(x, y, z);
         return group;
@@ -293,39 +411,77 @@
 
     function createTrailParticle(x, z) {
         const geo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.6
+        });
         const p = new THREE.Mesh(geo, mat);
         p.position.set(x + (Math.random() - 0.5) * 0.4, 0.1, z + (Math.random() - 0.5) * 0.4);
         scene.add(p);
-        particles.push({ mesh: p, life: 1.0, decay: 0.04 + Math.random() * 0.04 });
+        
+        particles.push({
+            mesh: p,
+            life: 1.0,
+            decay: 0.04 + Math.random() * 0.04
+        });
     }
 
     function show3DText(mesh, text) {
         if (!mesh) return;
+
         let timeLeft = 30;
-        if (mesh.chatTimerIntervalID) clearInterval(mesh.chatTimerIntervalID);
+        const chatIntervalName = "chatTimerIntervalID";
+        
+        if (mesh[chatIntervalName]) clearInterval(mesh[chatIntervalName]);
         const oldText = mesh.getObjectByName("chatBubble");
         if (oldText) mesh.remove(oldText);
 
-        const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
-        canvas.width = 512; canvas.height = 128;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 512;
+        canvas.height = 128;
+
         const texture = new THREE.CanvasTexture(canvas);
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true }));
-        sprite.name = "chatBubble"; sprite.scale.set(4, 1, 1); sprite.position.set(0, 3.4, 0);
+        const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.name = "chatBubble";
+        sprite.scale.set(4, 1, 1);
+        sprite.position.set(0, 3.4, 0);
         mesh.add(sprite);
 
         function redraw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.roundRect?.(10, 10, 492, 108, 15); ctx.fill();
-            ctx.strokeStyle = '#51cf66'; ctx.lineWidth = 4; ctx.stroke();
-            ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, 256, 50);
-            ctx.fillStyle = '#ffeb3b'; ctx.font = '18px Arial'; ctx.fillText(`(${timeLeft}с)`, 256, 90);
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+            ctx.roundRect?.(10, 10, 492, 108, 15);
+            ctx.fill();
+            ctx.strokeStyle = '#51cf66';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(text, 256, 50);
+            
+            ctx.fillStyle = '#ffeb3b';
+            ctx.font = '18px Arial';
+            ctx.fillText(`(${timeLeft}с)`, 256, 90);
+
             texture.needsUpdate = true;
         }
+
         redraw();
-        mesh.chatTimerIntervalID = setInterval(() => {
+
+        mesh[chatIntervalName] = setInterval(() => {
             timeLeft--;
-            if (timeLeft <= 0) { clearInterval(mesh.chatTimerIntervalID); mesh.remove(sprite); } else redraw();
+            if (timeLeft <= 0) {
+                clearInterval(mesh[chatIntervalName]);
+                if (mesh && sprite) mesh.remove(sprite);
+            } else {
+                redraw();
+            }
         }, 1000);
     }
 
@@ -335,7 +491,7 @@
                 const speed = 0.16;
                 const moveVector = new THREE.Vector3();
 
-                // Движение рассчитывается СТРОГО ОТПРАВЛЯЯСЬ ОТ НАПРАВЛЕНИЯ ВЗГЛЯДА КАМЕРЫ ИГРОКА
+                // ИСПРАВЛЕНО: Прямой расчет векторов WASD без инвертирования знаков
                 if (keys.forward) moveVector.z -= 1;
                 if (keys.backward) moveVector.z += 1;
                 if (keys.left) moveVector.x -= 1;
@@ -344,17 +500,17 @@
                 let isMoving = false;
                 if (moveVector.lengthSq() > 0) {
                     moveVector.normalize().multiplyScalar(speed);
-                    // Поворачиваем вектор движения в направлении взгляда локального игрока
+                    // Движение идет относительно направления взгляда игрока (yaw)
                     moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
                     playerMesh.position.add(moveVector);
                     isMoving = true;
+                    
                     createTrailParticle(playerMesh.position.x, playerMesh.position.z);
                 }
                 
-                // Направление модели игрока синхронно следует за взглядом камеры
                 playerMesh.rotation.y = yaw;
 
-                // Камера всегда следует за игроком сзади на расстоянии 2 единицы
+                // ИСПРАВЛЕНО: Камера жестко следует сзади на расстоянии 2 для ОБОИХ игроков
                 const cameraOffset = new THREE.Vector3(0, 1.9, 2.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
                 camera.position.copy(playerMesh.position).add(cameraOffset);
 
@@ -378,8 +534,12 @@
                         } else {
                             otherPlayerMesh.position.x = pos[id].x;
                             otherPlayerMesh.position.z = pos[id].z;
-                            if(pos[id].rotY !== undefined) otherPlayerMesh.rotation.y = pos[id].rotY;
-                            if (pos[id].isMoving) createTrailParticle(otherPlayerMesh.position.x, otherPlayerMesh.position.z);
+                            if(pos[id].rotY !== undefined) {
+                                otherPlayerMesh.rotation.y = pos[id].rotY;
+                            }
+                            if (pos[id].isMoving) {
+                                createTrailParticle(otherPlayerMesh.position.x, otherPlayerMesh.position.z);
+                            }
                         }
                     }
                 });
@@ -387,10 +547,16 @@
         });
 
         db.ref('rooms/' + roomId + '/chats').on('child_changed', (snap) => {
-            const data = snap.val(); if (snap.key !== playerId && otherPlayerMesh) show3DText(otherPlayerMesh, data.text);
+            const data = snap.val();
+            if (snap.key !== playerId && otherPlayerMesh) {
+                show3DText(otherPlayerMesh, data.text);
+            }
         });
         db.ref('rooms/' + roomId + '/chats').on('child_added', (snap) => {
-            const data = snap.val(); if (snap.key !== playerId && otherPlayerMesh) show3DText(otherPlayerMesh, data.text);
+            const data = snap.val();
+            if (snap.key !== playerId && otherPlayerMesh) {
+                show3DText(otherPlayerMesh, data.text);
+            }
         });
     }
 
@@ -399,16 +565,29 @@
         requestAnimationFrame(animate);
 
         for (let i = particles.length - 1; i >= 0; i--) {
-            let p = particles[i]; p.life -= p.decay;
+            let p = particles[i];
+            p.life -= p.decay;
             p.mesh.scale.set(p.life, p.life, p.life);
-            p.mesh.material.opacity = p.life * 0.6; p.mesh.position.y += 0.01;
-            if (p.life <= 0) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); particles.splice(i, 1); }
+            p.mesh.material.opacity = p.life * 0.6;
+            p.mesh.position.y += 0.01;
+            
+            if (p.life <= 0) {
+                scene.remove(p.mesh);
+                p.mesh.geometry.dispose();
+                p.mesh.material.dispose();
+                particles.splice(i, 1);
+            }
         }
+
         renderer.render(scene, camera);
     }
 
     window.addEventListener('resize', () => {
-        if (camera && renderer) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+        if (camera && renderer) {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
     });
 </script>
 
