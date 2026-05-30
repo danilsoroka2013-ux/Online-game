@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FPS Game</title>
+    <title>Third Person Game</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
@@ -77,9 +77,9 @@
     let syncInterval = null;
     let particles = [];
 
-    // Локальные углы поворота для плавной синхронизации осей
-    let yaw = 0;
-    let pitch = 0;
+    // Углы обзора мыши (классический FPS/TPS без инверсий)
+    let cameraYaw = 0;
+    let cameraPitch = 0;
 
     document.addEventListener('keydown', (e) => {
         if (isChatOpen && e.code !== 'Enter') return;
@@ -105,14 +105,13 @@
 
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === document.getElementById('canvas') && camera && !isChatOpen) {
-            // ИСПРАВЛЕНО: Прямое накопление углов вращения мыши без инверсий
-            yaw -= e.movementX * 0.0025;
-            pitch -= e.movementY * 0.0025;
+            // Обычное нормальное вращение мыши
+            cameraYaw -= e.movementX * 0.0025;
+            cameraPitch -= e.movementY * 0.0025;
             
-            if (pitch > Math.PI / 2.3) pitch = Math.PI / 2.3;
-            if (pitch < -Math.PI / 2.3) pitch = -Math.PI / 2.3;
-
-            camera.rotation.set(pitch, yaw, 0, 'YXZ');
+            // Ограничение по вертикали, чтобы камера не переворачивалась через голову
+            if (cameraPitch > Math.PI / 4) cameraPitch = Math.PI / 4;
+            if (cameraPitch < -Math.PI / 6) cameraPitch = -Math.PI / 6;
         }
     });
 
@@ -290,28 +289,19 @@
 
         generateEnvironment();
 
-        // ИСПРАВЛЕНО: Спавним игроков сразу развернутыми лицом друг к другу
         const startX = playerRole === 'host' ? -15 : 15;
-        const startRotY = playerRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
-
         playerMesh = createPlayerMesh(startX, 0, 0, true);
-        playerMesh.rotation.y = startRotY;
         scene.add(playerMesh);
 
-        // Задаем камере начальное верное направление взгляда
-        yaw = startRotY;
-        pitch = 0;
-        camera.rotation.set(pitch, yaw, 0, 'YXZ');
-
-        // ИСПРАВЛЕНО: Камера изначально жестко сзади на расстоянии 2 для обоих игроков
-        const cameraOffset = new THREE.Vector3(0, 1.9, 2.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-        camera.position.copy(playerMesh.position).add(cameraOffset);
+        // Начальные углы обзора (смотрят к центру карты)
+        cameraYaw = playerRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
+        cameraPitch = 0.1;
 
         animate();
     }
 
     function generateEnvironment() {
-        // ВОЗВРАЩЕНО: Полный код генерации деревьев
+        // Полные 20 деревьев
         for (let i = 0; i < 20; i++) {
             const tree = new THREE.Group();
             const trunk = new THREE.Mesh(
@@ -332,7 +322,7 @@
             scene.add(tree);
         }
 
-        // ВОЗВРАЩЕНО: Полный код генерации камней
+        // Полные 30 камней
         for (let i = 0; i < 30; i++) {
             const size = 0.5 + Math.random() * 1.2;
             const rock = new THREE.Mesh(
@@ -346,7 +336,7 @@
             scene.add(rock);
         }
 
-        // ВОЗВРАЩЕНО: Полный код генерации травы
+        // Полные 150 пучков травы
         for (let i = 0; i < 150; i++) {
             const grassGroup = new THREE.Group();
             const bladeMat = new THREE.MeshBasicMaterial({ color: 0x3d8c33 });
@@ -491,7 +481,7 @@
                 const speed = 0.16;
                 const moveVector = new THREE.Vector3();
 
-                // ИСПРАВЛЕНО: Прямой расчет векторов WASD без инвертирования знаков
+                // ИСПРАВЛЕНО: СТРОГО чистый и классический WASD без инвертирования знаков осей
                 if (keys.forward) moveVector.z -= 1;
                 if (keys.backward) moveVector.z += 1;
                 if (keys.left) moveVector.x -= 1;
@@ -500,19 +490,31 @@
                 let isMoving = false;
                 if (moveVector.lengthSq() > 0) {
                     moveVector.normalize().multiplyScalar(speed);
-                    // Движение идет относительно направления взгляда игрока (yaw)
-                    moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                    // Движение рассчитывается относительно угла поворота мыши по горизонтали (cameraYaw)
+                    moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
                     playerMesh.position.add(moveVector);
                     isMoving = true;
                     
                     createTrailParticle(playerMesh.position.x, playerMesh.position.z);
                 }
                 
-                playerMesh.rotation.y = yaw;
+                // Модель плавно поворачивается лицом в ту сторону, куда смотрит камера
+                playerMesh.rotation.y = cameraYaw;
 
-                // ИСПРАВЛЕНО: Камера жестко следует сзади на расстоянии 2 для ОБОИХ игроков
-                const cameraOffset = new THREE.Vector3(0, 1.9, 2.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-                camera.position.copy(playerMesh.position).add(cameraOffset);
+                // ИСПРАВЛЕНО: Вид от 3-го лица в стиле GTA 5 (Камера справа-сзади от персонажа)
+                // Смещение: X = 0.8 (справа от плеча), Y = 2.1 (чуть выше головы), Z = 2.5 (сзади персонажа)
+                const targetOffset = new THREE.Vector3(0.8, 2.1, 2.5);
+                
+                // Применяем вращение мыши (Yaw и Pitch) к смещению камеры
+                targetOffset.applyAxisAngle(new THREE.Vector3(1, 0, 0), cameraPitch);
+                targetOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+                
+                // Устанавливаем позицию камеры
+                camera.position.copy(playerMesh.position).add(targetOffset);
+                
+                // Камера всегда смотрит в точку чуть впереди персонажа, центрируя обзор
+                const lookTarget = playerMesh.position.clone().add(new THREE.Vector3(0, 1.6, 0));
+                camera.lookAt(lookTarget);
 
                 db.ref('rooms/' + roomId + '/pos/' + playerId).set({
                     x: Math.round(playerMesh.position.x * 100) / 100,
