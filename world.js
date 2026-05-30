@@ -10,7 +10,7 @@ let isHost = false;
 let players = {}; // Хранилище 3D объектов игроков
 let gameStarted = false;
 
-// Ссылка на комнату (сделаем одну статичную комнату "main_room")
+// Ссылка на комнату
 const roomRef = db.ref('rooms/main_room');
 
 // Инициализация Three.js сцены
@@ -49,18 +49,16 @@ function initWorld() {
 function createBallMesh(color) {
     const group = new THREE.Group();
 
-    // Тело колобка
     const bodyGeo = new THREE.SphereGeometry(1, 32, 32);
     const bodyMat = new THREE.MeshStandardMaterial({ color: color });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     group.add(body);
 
-    // Глаза, чтобы видеть куда он катится
     const eyeGeo = new THREE.SphereGeometry(0.15, 8, 8);
     const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
     
     const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-    leftEye.position.set(0.3, 0.3, 0.9); // Спереди сферы
+    leftEye.position.set(0.3, 0.3, 0.9);
     
     const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
     rightEye.position.set(-0.3, 0.3, 0.9);
@@ -69,14 +67,14 @@ function createBallMesh(color) {
     return group;
 }
 
-// Подключение к Firebase и Лобби
 initWorld();
 
-// Генерируем уникальный ID для себя при входе
+// Генерируем уникальный ID для себя
 localPlayerId = 'player_' + Math.floor(Math.random() * 100000);
 
-// При закрытии вкладки удаляем себя из базы
 const playerRef = roomRef.child('players').child(localPlayerId);
+
+// Важно: при выходе удаляем себя из базы
 playerRef.onDisconnect().remove();
 
 // Записываем свои начальные данные
@@ -94,12 +92,21 @@ playerRef.set({
 roomRef.on('value', (snapshot) => {
     const data = snapshot.val() || {};
     const fbPlayers = data.players || {};
-    
-    // Проверка на создателя (первый в списке становится хостом)
     const pIds = Object.keys(fbPlayers);
+
+    // Умный сброс комнаты: если игроков 0, выключаем статус "started"
+    if (pIds.length === 0 && data.started) {
+        roomRef.child('started').set(false);
+        return;
+    }
+
+    // Проверка на создателя (первый в списке)
     if (pIds[0] === localPlayerId) {
         isHost = true;
-        startBtn.disabled = pIds.length < 1; // Можно запустить даже одному для теста, макс 3
+        startBtn.disabled = false; 
+    } else {
+        isHost = false;
+        startBtn.disabled = true;
     }
 
     // Лимит 3 игрока
@@ -114,32 +121,31 @@ roomRef.on('value', (snapshot) => {
     playerCountEl.innerText = `Игроков в сети: ${pIds.length} / 3`;
     playersListEl.innerHTML = pIds.map(id => `<div>${id === localPlayerId ? '<b>Вы</b>' : id} ${pIds[0] === id ? '(Создатель)' : ''}</div>`).join('');
 
-    // Если игра запущена хостом
-    if (data.started && !gameStarted) {
+    // Если игра запущена в базе, а у нас ещё нет — запускаем локально
+    if (data.started && !gameStarted && fbPlayers[localPlayerId]) {
         startGame();
     }
+    // Если в базе игра сброшена, а мы всё ещё в игре — возвращаем в лобби
+    if (!data.started && gameStarted) {
+        window.location.reload();
+    }
 
-    // Синхронизация 3D объектов игроков на сцене
+    // Синхронизация 3D объектов игроков
     for (let id in fbPlayers) {
         const pData = fbPlayers[id];
         if (!players[id]) {
-            // Создаем нового колобка на сцене
             players[id] = createBallMesh(pData.color);
             scene.add(players[id]);
-            // Создаем плавающий бабл чата для него
             createChatBubbleElement(id);
         }
         
-        // Позиция
         players[id].position.set(pData.x, 1, pData.z);
-        // Вращение (физика качения)
         players[id].rotation.set(pData.rotX, pData.rotY, pData.rotZ);
 
-        // Обновление текста чата
         updateChatBubbleText(id, pData.msg, pData.msgTime);
     }
 
-    // Удаляем ушедших игроков
+    // Удаляем ушедших
     for (let id in players) {
         if (!fbPlayers[id]) {
             scene.remove(players[id]);
@@ -149,7 +155,7 @@ roomRef.on('value', (snapshot) => {
     }
 });
 
-// Нажатие кнопки Старт хостом
+// Нажатие кнопки Старт
 startBtn.addEventListener('click', () => {
     if (isHost) roomRef.update({ started: true });
 });
@@ -160,27 +166,23 @@ function startGame() {
     canvasContainer.style.display = 'block';
     document.getElementById('chat-container').style.display = 'flex';
     
-    // Инициализируем камеру и управление
     initCamera(players[localPlayerId]);
     initControls(playerRef, players[localPlayerId]);
     
     animate();
 }
 
-// Игровой цикл
 function animate() {
     requestAnimationFrame(animate);
-    
     if (gameStarted) {
         updateControls();
         updateCamera();
         updateBubblePositions();
     }
-    
     renderer.render(scene, camera);
 }
 
-// Функции для Баблов ЧАТА
+// ЧАТ БАБЛЫ
 const bubblesContainer = document.createElement('div');
 document.body.appendChild(bubblesContainer);
 
@@ -198,7 +200,6 @@ function updateChatBubbleText(id, msg, timestamp) {
     if (!b) return;
     
     const now = Date.now();
-    // Проверка на 30 секунд жизни сообщения
     if (msg && (now - timestamp < 30000)) {
         const timeLeft = Math.ceil((30000 - (now - timestamp)) / 1000);
         b.innerText = `${msg} (${timeLeft}с)`;
@@ -213,9 +214,8 @@ function updateBubblePositions() {
         const b = document.getElementById('bubble-' + id);
         if (!b || b.style.opacity === '0') continue;
         
-        // Проецируем 3D координаты игрока на 2D экран
         const p = players[id].position.clone();
-        p.y += 1.5; // Смещение чуть выше головы колобка
+        p.y += 1.5;
         p.project(camera);
         
         const x = (p.x * .5 + .5) * window.innerWidth;
@@ -226,7 +226,6 @@ function updateBubblePositions() {
     }
 }
 
-// Раз в секунду обновляем таймер в чат-баблах
 setInterval(() => {
     if(!gameStarted) return;
     roomRef.child('players').once('value', snapshot => {
