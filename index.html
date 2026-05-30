@@ -21,9 +21,11 @@
         #playerCount { margin-top: 10px; }
         #startBtn { display: none; background: #51cf66; }
         #startBtn.show { display: inline-block; }
-        #gameInfo { position: absolute; top: 20px; left: 20px; color: #00ff00; font-size: 16px; z-index: 101; }
-        .game-button { padding: 10px 25px; background: #51cf66; color: white; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px; }
-        .game-button:hover { background: #40c057; }
+        #gameInfo { position: absolute; top: 20px; left: 20px; color: #00ff00; font-size: 16px; z-index: 101; pointer-events: none; }
+        
+        /* Стили для чата */
+        #chatInputContainer { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 102; display: none; }
+        #chatInput { width: 400px; padding: 12px; background: rgba(0,0,0,0.8); border: 2px solid #51cf66; color: white; font-size: 16px; border-radius: 5px; outline: none; }
     </style>
 </head>
 <body>
@@ -47,6 +49,10 @@
 </div>
 
 <div id="gameInfo"></div>
+<div id="chatInputContainer">
+    <input type="text" id="chatInput" placeholder="Введите сообщение и нажмите Enter..." maxlength="50">
+</div>
+
 <canvas id="canvas"></canvas>
 
 <script>
@@ -70,12 +76,20 @@
     let scene, camera, renderer, playerMesh, otherPlayerMesh;
     let keys = {};
     let gameStarted = false;
+    let isChatOpen = false;
     let syncInterval = null;
 
     // WASD + русская раскладка
     document.addEventListener('keydown', (e) => {
+        if (isChatOpen && e.code !== 'Enter') return; // Блокируем ходьбу при открытом чате
+
         const keyMap = {'KeyW': 'forward', 'KeyA': 'left', 'KeyS': 'backward', 'KeyD': 'right', 'KeyЦ': 'forward', 'KeyФ': 'left', 'KeyЫ': 'backward', 'KeyВ': 'right'};
         if (keyMap[e.code]) keys[keyMap[e.code]] = true;
+
+        // Чат на ENTER
+        if (e.code === 'Enter' && gameStarted) {
+            handleChatToggle();
+        }
     });
 
     document.addEventListener('keyup', (e) => {
@@ -85,20 +99,48 @@
 
     // Мышь
     document.addEventListener('click', () => {
-        if (gameStarted) {
+        if (gameStarted && !isChatOpen) {
             document.getElementById('canvas').requestPointerLock?.();
         }
     });
 
     document.addEventListener('mousemove', (e) => {
-        if (document.pointerLockElement === document.getElementById('canvas') && camera) {
+        if (document.pointerLockElement === document.getElementById('canvas') && camera && !isChatOpen) {
             camera.rotation.order = 'YXZ';
-            camera.rotation.y -= e.movementX * 0.003;
-            camera.rotation.x -= e.movementY * 0.003;
-            if (camera.rotation.x > Math.PI / 2) camera.rotation.x = Math.PI / 2;
-            if (camera.rotation.x < -Math.PI / 2) camera.rotation.x = -Math.PI / 2;
+            camera.rotation.y -= e.movementX * 0.0025;
+            camera.rotation.x -= e.movementY * 0.0025;
+            if (camera.rotation.x > Math.PI / 2.2) camera.rotation.x = Math.PI / 2.2;
+            if (camera.rotation.x < -Math.PI / 2.2) camera.rotation.x = -Math.PI / 2.2;
         }
     });
+
+    function handleChatToggle() {
+        const container = document.getElementById('chatInputContainer');
+        const input = document.getElementById('chatInput');
+
+        if (!isChatOpen) {
+            // Открываем чат
+            isChatOpen = true;
+            keys = {}; // Сбрасываем движение
+            document.exitPointerLock?.();
+            container.style.display = 'block';
+            input.focus();
+        } else {
+            // Закрываем чат и отправляем сообщение
+            isChatOpen = false;
+            const text = input.value.trim();
+            if (text) {
+                db.ref('rooms/' + roomId + '/chats/' + playerId).set({
+                    text: text,
+                    timestamp: Date.now()
+                });
+                show3DText(playerMesh, text);
+            }
+            input.value = '';
+            container.style.display = 'none';
+            document.getElementById('canvas').requestPointerLock?.();
+        }
+    }
 
     function generateCode() {
         return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -181,7 +223,7 @@
     }
 
     function startGame() {
-        if (gameStarted) return; // Защита от повторного вызова
+        if (gameStarted) return;
         gameStarted = true;
 
         if (playerRole === 'host') {
@@ -198,53 +240,122 @@
     function initThreeJS() {
         const canvas = document.getElementById('canvas');
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87ceeb);
+        scene.background = new THREE.Color(0xaaccff);
+        scene.fog = new THREE.FogExp2(0xaaccff, 0.015); // Небольшой туман для атмосферы
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(playerRole === 'host' ? -5 : 5, 1.6, 0); // Разные точки спавна для хоста и гостя
 
         renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
 
         // Свет
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-        dirLight.position.set(5, 10, 7);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(20, 40, 20);
         scene.add(dirLight);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
         // Пол
         const floor = new THREE.Mesh(
-            new THREE.PlaneGeometry(200, 200),
-            new THREE.MeshBasicMaterial({ color: 0x90ee90 })
+            new THREE.PlaneGeometry(300, 300),
+            new THREE.MeshStandardMaterial({ color: 0x55aa44, roughness: 0.9 })
         );
         floor.rotation.x = -Math.PI / 2;
-        floor.position.y = 0;
         scene.add(floor);
 
-        // Спавн себя
-        playerMesh = createPlayerMesh(camera.position.x, 0, 0, true);
+        // --- ГЕНЕРАЦИЯ ОКРУЖЕНИЯ ---
+        generateEnvironment();
+
+        // Спавн игрока
+        const startX = playerRole === 'host' ? -15 : 15;
+        playerMesh = createPlayerMesh(startX, 0, 0, true);
         scene.add(playerMesh);
 
-        // Разворачиваем камеру друг на друга при спавне
-        camera.lookAt(playerRole === 'host' ? 5 : -5, 1.6, 0);
+        // Позиционируем камеру изначально
+        camera.position.set(startX, 1.9, 0.4); 
+        camera.lookAt(playerRole === 'host' ? 15 : -15, 1.9, 0);
 
         document.getElementById('gameInfo').innerHTML = `
-            <button class="game-button" onclick="selectMode('duo')">Дуо</button>
-            <button class="game-button" onclick="selectMode('solo')">Соло</button>
-            <p style="margin-top: 15px;">WASD + Мышь (кликни по экрану для обзора)</p>
+            <p>Режим: <strong>Solo</strong></p>
+            <p style="margin-top: 5px;">WASD — Ходьба | Мышь — Обзор</p>
+            <p style="margin-top: 5px; color: #ffeb3b;">Нажми ENTER чтобы писать в чат</p>
         `;
 
         animate();
     }
 
-    // Собираем "таблетку" вручную из цилиндра и сфер для совместимости с r128
+    function generateEnvironment() {
+        // 1. Создаем деревья
+        for (let i = 0; i < 20; i++) {
+            const tree = new THREE.Group();
+            
+            // Ствол
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.3, 0.5, 4, 8),
+                new THREE.MeshStandardMaterial({ color: 0x5a3d28, roughness: 0.9 })
+            );
+            trunk.position.y = 2;
+            tree.add(trunk);
+
+            // Листва
+            const leaves = new THREE.Mesh(
+                new THREE.SphereGeometry(1.8, 8, 8),
+                new THREE.MeshStandardMaterial({ color: 0x2e6f40, roughness: 0.6 })
+            );
+            leaves.position.y = 4.5;
+            tree.add(leaves);
+
+            setRandomPosition(tree, 15, 120);
+            scene.add(tree);
+        }
+
+        // 2. Создаем камни
+        for (let i = 0; i < 30; i++) {
+            const size = 0.5 + Math.random() * 1.2;
+            const rock = new THREE.Mesh(
+                new THREE.DodecahedronGeometry(size),
+                new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 })
+            );
+            rock.position.y = size * 0.5;
+            rock.scale.set(1, 0.7 + Math.random()*0.5, 1);
+            
+            setRandomPosition(rock, 10, 130);
+            scene.add(rock);
+        }
+
+        // 3. Создаем траву (пучки)
+        for (let i = 0; i < 150; i++) {
+            const grassGroup = new THREE.Group();
+            const bladeMat = new THREE.MeshBasicMaterial({ color: 0x3d8c33 });
+            
+            for(let j = 0; j < 3; j++) {
+                const blade = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.6, 4), bladeMat);
+                blade.position.set((Math.random()-0.5)*0.3, 0.3, (Math.random()-0.5)*0.3);
+                blade.rotation.z = (Math.random() - 0.5) * 0.4;
+                blade.rotation.x = (Math.random() - 0.5) * 0.4;
+                grassGroup.add(blade);
+            }
+
+            setRandomPosition(grassGroup, 5, 140);
+            scene.add(grassGroup);
+        }
+    }
+
+    function setRandomPosition(object, minDist, maxDist) {
+        // Распределяем объекты вокруг центра, чтобы они не спавнились прямо на игроках
+        const angle = Math.random() * Math.PI * 2;
+        const radius = minDist + Math.random() * (maxDist - minDist);
+        object.position.x = Math.cos(angle) * radius;
+        object.position.z = Math.sin(angle) * radius;
+    }
+
     function createPlayerMesh(x, y, z, isLocal) {
         const group = new THREE.Group();
 
+        // Тело капсулы (цилиндр + полусферы)
         const bodyGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16);
-        const bodyMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff });
+        const bodyMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xff4444 : 0x4444ff, roughness: 0.5 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.y = 1.4; // Приподнимаем над землей
+        body.position.y = 1.4;
         group.add(body);
 
         const capGeo = new THREE.SphereGeometry(0.6, 16, 16);
@@ -256,24 +367,22 @@
         bottomCap.position.y = 0.5;
         group.add(bottomCap);
 
-        // Глаза
-        const eyeGeo = new THREE.SphereGeometry(0.15, 8, 8);
+        // Глаза (смотрят вперед по оси +Z)
+        const eyeGeo = new THREE.SphereGeometry(0.14, 8, 8);
         const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-        // Левый глаз + зрачок
         const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-        leftEye.position.set(-0.25, 2.0, 0.5);
-        const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), pupilMat);
-        leftPupil.position.set(-0.25, 2.0, 0.62);
+        leftEye.position.set(-0.25, 2.0, 0.52);
+        const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
+        leftPupil.position.set(-0.25, 2.0, 0.63);
         group.add(leftEye);
         group.add(leftPupil);
 
-        // Правый глаз + зрачок
         const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-        rightEye.position.set(0.25, 2.0, 0.5);
-        const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), pupilMat);
-        rightPupil.position.set(0.25, 2.0, 0.62);
+        rightEye.position.set(0.25, 2.0, 0.52);
+        const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), pupilMat);
+        rightPupil.position.set(0.25, 2.0, 0.63);
         group.add(rightEye);
         group.add(rightPupil);
 
@@ -281,14 +390,54 @@
         return group;
     }
 
-    function selectMode(mode) {
-        document.getElementById('gameInfo').innerHTML = '<p>Режим: <strong>' + mode + '</strong></p><p>WASD + Мышь</p>';
+    // Создание 3D-текста над головой через Canvas-текстуру
+    function show3DText(mesh, text) {
+        if (!mesh) return;
+        
+        // Удаляем старое облако текста, если оно есть
+        const oldText = mesh.getObjectByName("chatBubble");
+        if (oldText) mesh.remove(oldText);
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 512;
+        canvas.height = 128;
+
+        // Фон сообщения
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.roundRect?.(10, 10, 492, 108, 15);
+        ctx.fill();
+        ctx.strokeStyle = '#51cf66';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // Текст сообщения
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, 256, 64);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(spriteMat);
+        
+        sprite.name = "chatBubble";
+        sprite.scale.set(4, 1, 1);
+        sprite.position.set(0, 3.4, 0); // Высота над таблеткой
+
+        mesh.add(sprite);
+
+        // Удалить текст через 5 секунд
+        setTimeout(() => {
+            if (mesh && sprite) mesh.remove(sprite);
+        }, 5000);
     }
 
     function syncPlayers() {
         syncInterval = setInterval(() => {
             if (playerMesh && gameStarted && camera) {
-                const speed = 0.15;
+                const speed = 0.16;
                 const dir = new THREE.Vector3();
 
                 if (keys.forward) dir.z -= 1;
@@ -300,20 +449,25 @@
                     dir.normalize().multiplyScalar(speed);
                     dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
                     playerMesh.position.add(dir);
-                    
-                    // Привязываем камеру к позиции меша игрока
-                    camera.position.copy(playerMesh.position);
-                    camera.position.y = 1.6; // Высота глаз
                 }
+                
+                // Вращаем тело персонажа за камерой по оси Y
+                playerMesh.rotation.y = camera.rotation.y;
+
+                // Камера от первого лица: ставим на уровень глаз и выдвигаем чуть-чуть вперед
+                const offset = new THREE.Vector3(0, 1.9, 0.15);
+                offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), camera.rotation.y);
+                camera.position.copy(playerMesh.position).add(offset);
 
                 db.ref('rooms/' + roomId + '/pos/' + playerId).set({
                     x: Math.round(playerMesh.position.x * 100) / 100,
                     z: Math.round(playerMesh.position.z * 100) / 100,
-                    rotY: Math.round(camera.rotation.y * 100) / 100
+                    rotY: Math.round(playerMesh.rotation.y * 100) / 100
                 });
             }
         }, 30);
 
+        // Слушаем позиции других игроков
         db.ref('rooms/' + roomId + '/pos').on('value', (snap) => {
             if (snap.exists() && scene) {
                 const pos = snap.val();
@@ -331,6 +485,20 @@
                         }
                     }
                 });
+            }
+        });
+
+        // Слушаем новые сообщения чата от других игроков
+        db.ref('rooms/' + roomId + '/chats').on('child_changed', (snap) => {
+            const data = snap.val();
+            if (snap.key !== playerId && otherPlayerMesh) {
+                show3DText(otherPlayerMesh, data.text);
+            }
+        });
+        db.ref('rooms/' + roomId + '/chats').on('child_added', (snap) => {
+            const data = snap.val();
+            if (snap.key !== playerId && otherPlayerMesh) {
+                show3DText(otherPlayerMesh, data.text);
             }
         });
     }
