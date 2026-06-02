@@ -88,6 +88,26 @@
     const gameRef = db.ref('game');
     const leversRef = gameRef.child('levers');
 
+    /* ===== АВТО ОЧИСТКА ПРИ ВЫХОДЕ ВСЕХ ===== */
+
+// При запуске — если игроков нет, но game остался от прошлой сессии — чистим
+playersRef.once('value', snap => {
+    const data = snap.val();
+    const count = data ? Object.keys(data).length : 0;
+    if (count === 0) gameRef.remove();
+});
+
+// Каждые 3 секунды проверяем: если в players пусто — удаляем game
+setInterval(() => {
+    playersRef.once('value', snap => {
+        const data = snap.val();
+        const count = data ? Object.keys(data).length : 0;
+        if (count === 0) {
+            gameRef.remove();
+        }
+    });
+}, 3000);
+
     /* ===== СОСТОЯНИЕ ===== */
     let phase = 0, leversOn = 0;
     const TOTAL_LEVERS = 5;
